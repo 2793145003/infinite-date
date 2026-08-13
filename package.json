@@ -1,0 +1,20 @@
+{
+  "name": "infinite-date",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "无限心动 — 无限流世界观驱动的AI约会模拟器",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "build": "pnpm --filter @idate/shared run build && pnpm --filter @idate/server run build && pnpm --filter @idate/web run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22"
+  }
+}

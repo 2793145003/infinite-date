@@ -1,0 +1,19 @@
+{
+  "_comment": "所有权限消耗当前为 0（开发阶段）。生产部署前必须设值——见 permission-config.ts 的 DEFAULT_COSTS 作参考",
+  "mission_base_reward": 10,
+  "mission_obsession_bonus": 5,
+  "mission_coop_bonus": {
+    "poor": 0,
+    "decent": 3,
+    "excellent": 5
+  },
+
+  "create_public_npc": 0,
+  "create_private_npc": 0,
+  "override": 0,
+  "create_location_public": 0,
+  "create_location_private": 0,
+  "instance_replace": 0,
+  "undo_message": 0,
+  "internal_view": 0
+}
