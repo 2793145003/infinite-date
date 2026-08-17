@@ -21,6 +21,18 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- 系统级配置：hub_world_id（主城世界ID）等。主神ID为硬编码常量'DEITY'，不需配置
 ```
 
+### ⚡ player_llm_configs — per-player LLM 配置
+```sql
+CREATE TABLE IF NOT EXISTS player_llm_configs (
+  player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+  base_url   TEXT NOT NULL DEFAULT '',
+  api_key    TEXT NOT NULL DEFAULT '',
+  model      TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+-- 每个玩家可配置自己的 LLM endpoint。任一字段为空 → 回落到环境变量默认值（LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）
+```
+
 ### players
 ```sql
 CREATE TABLE IF NOT EXISTS players (
@@ -382,13 +394,13 @@ CREATE INDEX IF NOT EXISTS idx_perm_tx ON permission_transactions(player_id, cre
 ### 任务系统
 ```sql
 -- 三种任务：
---   角色任务(quest_type='character')：单人进入NPC过去的时间切片，遇到过去版本NPC。会梦到。填补意难平
---   世界任务(quest_type='world')：选好友同行，合作回收失去价值的物品
---   NPC任务(quest_type='npc')：系统发给NPC，NPC邀请玩家。角色特长温馨向
+--   角色任务(quest_type='character')：单人进入NPC过去的时间切片，遇到过去版本NPC。会梦到。填补意难平【未实现】
+--   世界任务(quest_type='world')：摇卦起卦→卦象驱动生成原创世界（困境→目标态）→玩家选好友同行→通关评级【已实现，见 HEXAGRAM_MISSION_DESIGN.md】
+--   NPC任务(quest_type='npc')：系统发给NPC，NPC邀请玩家。角色特长温馨向【未实现】
 CREATE TABLE IF NOT EXISTS missions (
   id           TEXT PRIMARY KEY,
   player_id    TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-  quest_type   TEXT NOT NULL,  -- 'character' | 'world' | 'npc'
+  quest_type   TEXT NOT NULL,  -- 'character' | 'world' | 'npc'（当前仅 'world' 有实现）
   assignee_type TEXT NOT NULL,  -- 'player' | 'character'
   assignee_id   TEXT NOT NULL,  -- player_id 或 character_id
   character_id TEXT,            -- 角色任务=NPC whose past / NPC任务=inviting NPC / 世界任务=companion NPC
@@ -397,10 +409,10 @@ CREATE TABLE IF NOT EXISTS missions (
   title        TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',
   status       TEXT NOT NULL DEFAULT 'available',  -- available/active/completed/declined
-  reward       INTEGER NOT NULL DEFAULT 0,  -- 具体数值待定，不同任务类型不同
-  evaluation_result TEXT,  -- JSON: 世界任务评级结果 {item_obtained: bool, obsession_resolved: bool, cooperation_quality: str}
+  reward       INTEGER NOT NULL DEFAULT 0,  -- 由 permission_costs.json 配置（mission_base_reward 等）
+  evaluation_result TEXT,  -- JSON: 世界任务评级结果 {goal_achieved: bool, cooperation_quality: str, summary: str, stats_state: {...}, stats_config: [...]}
   rating_score INTEGER,  -- 世界任务评级得分（1-3），用于更新玩家rating_score
-  ⚡metadata   TEXT NOT NULL DEFAULT '{}',  -- JSON: 结构化数据（item/obsession等）（migration追加）
+  ⚡metadata   TEXT NOT NULL DEFAULT '{}',  -- JSON: 结构化数据（世界设定/地标/世界NPC/困境数值/卦象档案等）（migration追加）
   created_at   INTEGER NOT NULL,
   started_at   INTEGER,
   completed_at INTEGER
@@ -968,12 +980,13 @@ CREATE TABLE turn_memory_fold (
 > **回滚守卫（与回滚的一致性）**：记忆折叠（`turn_memory_fold` / `turn_player_facts`）在回合 COMMIT 后**异步**（fire-and-forget）执行。若期间该轮已被 `rollbackScene` 撤回（删除 `scene_messages round_no>=target`），折叠前会检查该轮 `scene_messages` 是否仍存在——被回退则跳过写入，避免把已回退轮的**幽灵记忆**折回已删位置。
 
 ### turn_player_facts — 场景内 PlayerFacts（NPC对玩家记忆）
+> `scene_session_id` 允许 NULL：手动添加的事实（POST /facts）无场景来源，存 NULL；有场景来源的存真实 session id，删 session 时级联删。
 ```sql
 CREATE TABLE turn_player_facts (
   id                TEXT PRIMARY KEY,
   player_id         TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
   character_id      TEXT NOT NULL,
-  scene_session_id  TEXT NOT NULL REFERENCES scene_sessions(id) ON DELETE CASCADE,
+  scene_session_id  TEXT REFERENCES scene_sessions(id) ON DELETE CASCADE,
   round_no          INTEGER NOT NULL,
   fact              TEXT NOT NULL,
   created_at        INTEGER NOT NULL
@@ -1224,6 +1237,7 @@ migration 版本管理通过 `schema_migrations` 表实现，每条 migration �
 | scene_round_snapshots | 2026-08-13 | 建表（轮滚动快照） | lib/scene-schema.ts |
 | turn_memory_fold | 2026-08-13 | 建表 + `scene_session_id` 加 FK（ON DELETE CASCADE，session 数据跟随删） | lib/scene-schema.ts |
 | turn_player_facts | 2026-08-13 | 建表 + `scene_session_id` 加 FK（ON DELETE CASCADE） | lib/scene-schema.ts |
+| turn_player_facts | 2026-08-16 | `scene_session_id` 改允许 NULL（手动添加事实无场景来源）+ 补 FK，孤儿/空串转 NULL | db/index.ts migration `turn_player_facts_scene_session_nullable` |
 
 ---
 

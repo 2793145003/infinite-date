@@ -60,32 +60,26 @@ prompt分两层：
 - diff 只存差异字段——如过去版本形态不同，只写 appearance；性格有变化，只写 personality 的某一层（如只改 core，surface 和 extreme 继承当前角色卡）。prompt-builder合成镜像角色卡时用 diff 覆盖当前角色卡对应字段
 - dramatic_potential 评估这段过去的戏剧张力（是否有意难平、遗憾、未完成的事）。high 优先选为角色任务素材
 
-### mission.briefing — 任务发布
+### mission.worldgen — 世界任务生成（卦象驱动，生产默认）
 
-任务发布时的任务简报prompt。三种任务各有不同briefing结构：
-- **角色任务**：从NPC的 `backstory_milestones` 选一个里程碑，用 `summary` + `time_description` 生成任务世界设定。镜像NPC = 当前角色卡 + 里程碑 `diff` 覆盖，注入system prompt。镜像NPC不知道未来的事，不认识玩家
-- **世界任务**：系统生成原创世界 + 失去价值的物品 + 执念，玩家选好友同行
-- **NPC任务**：NPC根据自身特长邀请玩家，温馨向
+世界任务的世界由**卦象驱动**生成。一次 LLM 调用输出完整世界设定 + 地标 + 世界NPC + 任务切入点 + 通关流程：
 
-### world.generation — 原创世界生成
+- **输入**：卦象启示层（`hexagram_layer`，本卦/互卦/变卦/错卦四层）+ 纳甲人物关系网（`najia_layer`，六亲→叙事角色映射）+ 世界观基调（`theme_guide`）+ 任务目标玩法（`goal_guide`）+ 世界卡牌（`world_cards`，地名/人名/困境/物品随机卡）+ 玩家性别 + 同行者性别约束
+- **输出**：`name` / `summary` / `tone` / `rules` / `lore` + `world_tension`（困境表象）+ `target_state`（目标态）+ `hidden_thread`（隐藏暗线）+ `briefing` + `descend_identity`（玩家/同行者降临身份）+ `landmarks` + `world_npcs`（含任务核心对象/对手/贵人/靠山/竞争者/所求之人六类）+ `mission_hook` + `twist_seed` + `clues` + `environmental_clues` + `goal_path`（通关流程）+ `mission_goal`
+- **卦象是幕后骨架**：玩家永远看不到卦象，模板把骨架翻译成"一个人（或一小群人）具体的生活困境"——有名字、有面孔、有心碎的理由。困境要落到具体的人身上，不是抽象系统失衡
+- 世界NPC是真实生活的人，各自陷在困境里，有自己的名字、立场、改变的可能
 
-世界任务和NPC任务需要系统生成原创世界。一次LLM调用，输出完整的worlds表字段 + 执念物品设定：
-
-- **输入**：无（纯原创）或NPC特长（NPC任务时，世界设定配合NPC能力）
-- **输出**：`name` / `summary` / `tone` / `rules` / `lore`（写入worlds表）+ `item`（失去价值但被珍藏的物品）+ `obsession`（物品持有者的执念——谁舍不得放手、为什么）
-- **世界任务**：物品+执念是核心任务驱动——玩家要回收物品，过程是帮人解执念
-- **NPC任务**：世界为NPC特长服务（教唱歌的世界有需要音乐的孩子，办识字班的世界有文盲困境），物品+执念可选
-- **不重复**：每次新世界，不复用已有世界设定
+> 变体（AB 实验备选）：`mission.worldgen-goal.txt`（goal 版）与 `mission.worldgen-grounded.txt`（grounded 版）是同一生成的实验分支，生产默认用 `mission.worldgen.txt`。见 `scripts/ab-worldgen-goal.ts` / `ab-worldgen-grounded.ts`。
 
 ### mission.evaluator — 世界任务评级
 
 世界任务完成后，由约会评估器（LLM）在约会结束时判断三级评估：
 
-- **物品到手**（客观）：LLM输出 `item_obtained` 布尔值。false=任务失败不给权限，true=基础权限保障
-- **执念了却**（LLM判断）：强拿的还是主动交出的？伤害了对方还是帮对方释怀了？输出 `obsession_resolved` 布尔值
+- **目标达成**（数值系统判定）：困境浓度是否降至目标态，由 `judgeStatsAndAmbient` 逐轮判定，输出 `goal_achieved` 布尔值；评级器（LLM）复核并纠偏
 - **合作质量**（LLM判断）：玩家和同行NPC有没有真正合作？还是各走各的？输出 `cooperation_quality` 字符串（'poor' / 'decent' / 'excellent'）
 - 结果存入 `missions.evaluation_result`（JSON），评级得分存入 `missions.rating_score`（1-3），用于更新 `players.rating_score`
 - 评级影响后续任务发放：评级高→系统发更多更好的任务，评级低→减少或限制
+- **评级后自动发权限**：`grantPlayerPermission(playerId, totalReward, 'mission_reward')` + 同行NPC也获得权限（合作收益）。奖励数值由 `permission_costs.json` 配置
 
 ### phone.sms.style — 通用短信风格
 
@@ -229,7 +223,7 @@ NPC内心独白要写**当下真实感受和微反应**，不是总结发生了�
 3. 每轮对话 → `generateReply` 生成回复 + `scenario.stats-judge` 判定属性变化
 4. 剧本结束 → `scenario.dream` 生成梦短信，NPC主动发短信
 
-**剧本对话复用 `generateReply`（三层防御）**，与短信/约会路径完全一致。剧本的 `replySchema` 是 `REPLY_SCHEMA` 的子集（不需要 `item_obtained`/`environment`/`quest_npc_line`/`current_location`），`normalizeReply` 对缺失字段有默认值，直接兼容。
+**剧本对话复用 `generateReply`（三层防御）**，与短信/约会路径完全一致。剧本的 `replySchema` 是 `REPLY_SCHEMA` 的子集（不需要 `current_location`），`normalizeReply` 对缺失字段有默认值，直接兼容。
 
 **梦短信机制**：剧本结束后，NPC根据剧本Chronicle摘要"做梦"，主动发短信给玩家。梦短信不提取 `player_facts`（`skipPlayerFacts=true`），因为梦境不是真实经历。
 
@@ -250,7 +244,7 @@ NPC内心独白要写**当下真实感受和微反应**，不是总结发生了�
 **scene prompt文件：**
 
 - `scene.director.txt`（旧版，已标注过时）— 旧导演：产出"分镜脚本"（beat 序列），预排整轮谁说话/何时把话头抛回玩家。**点名版不调用此文件**，但文件保留作为回退。与点名版差异：缺数值结算/导演全局视角/开场情境区分。
-- `scene.actor.txt` — **演员/角色**：每个角色只演自己（有性格/记忆/当下情绪）。模板变量：`{{character_card}}`（人设）、`{{player_profile}}`（对方是谁）、`{{player_description}}`+`{{chronicle_summary}}`+`{{retrieved_memories}}`（过往）、`{{beat_intent}}`（这拍的方向）、`{{current_activity}}`（当前活动/目的）、`{{available_locations}}`/`{{internal_locations}}`（可移动的地点）。输出 JSON：
+- `scene.actor.txt` — **演员/角色**：每个角色只演自己（有性格/记忆/当下情绪）。模板变量：`{{character_card}}`（人设）、`{{player_profile}}`（对方是谁）、`{{player_description}}`+`{{chronicle_summary}}`+`{{retrieved_memories}}`（过往）、`{{scene_tone}}`（所在世界与场景——任务场景=任务世界困境+地点氛围）、`{{scene_rules}}`（规则与立场——含逐人 stance，任务场景的玩家/男主身份、任务目标、开局情境都在这）、`{{beat_intent}}`（这拍的方向）、`{{current_activity}}`（当前活动/目的）、`{{available_locations}}`/`{{internal_locations}}`（可移动的地点）。输出 JSON：
   ```json
   { "texts": ["你说的话", "可分几段"],
     "player_description": "你对对方的一句话定性(可保持不变)",
@@ -275,6 +269,8 @@ NPC内心独白要写**当下真实感受和微反应**，不是总结发生了�
 - 转场旁白：move 后若 output 末尾不是旁白，则插入一段新地点的环境旁白（避免旁白连旁白）。
 - 旁白四类触发：①有变化在发生 ②当下一瞬活得有质感 ③对话到头需带开 ④对话尴尬/冷场时顶替路人递话头。无四类瞬间不排。
 
+**任务场景（mission）NPC 认知**（2026-08-15 定稿）：任务场景（`scene_type='mission'`）的 actor 走同一套 `scene.actor.txt`，但 `scene_tone`/`scene_rules` 额外注入任务信息，`stance` 按角色身份逐人分发（男主=任务世界人物名单+同伴立场；任务 NPC=按 role 的定位）。六亲关系（谁贵谁敌）对玩家/男主隐藏、NPC 自己按定位演。完整设计见 `docs/HEXAGRAM_MISSION_DESIGN.md`「任务场景 NPC 认知」节。
+
 ---
 
 ## 三、LLM结构化输出
@@ -289,7 +285,6 @@ NPC的每次回复（短信/约会）是一次LLM调用，同时输出文本和�
   "internal": "她居然记得我喜欢肉桂卷……",
   "internal_notable": true,
   "player_description": "还挺有趣的交谈对象",
-  "item_obtained": false,
   "scene_concluded": false
 }
 ```
@@ -302,7 +297,6 @@ NPC的每次回复（短信/约会）是一次LLM调用，同时输出文本和�
 | internal | string | NPC内心独白，默认不展示给玩家。两个用途：①debug ②喂给Chronicle做记忆压缩素材。玩家可消耗权限窥探 |
 | internal_notable | bool | LLM自判这条独白值不值得付费看。大喜大悲、嘴上冷淡心里在意、反差最大的时候=true。平淡反应=false。玩家看到标注"有心声"的才能付费解锁 |
 | player_description | string | NPC对玩家的一句话定性。每次都输出，值可以和上一轮相同（保持原样）。存入relationships.player_description |
-| item_obtained | bool \| null | 仅世界任务约会中输出。LLM判断玩家是否已获得目标物品的所有权。null=非世界任务或尚未获得。true时任务标记完成，但约会不自动结束 |
 | scene_concluded | bool | 仅约会中输出。LLM判断场景是否自然收束（如NPC说"我们回去吧"）。true时前端提示"对话已自然结束"，玩家可选择继续或确认结束 |
 
 ### prompt中的关系语义
