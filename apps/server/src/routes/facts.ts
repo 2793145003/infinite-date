@@ -120,7 +120,7 @@ export async function factsRoutes(app: FastifyInstance): Promise<void> {
 
     db.prepare(`
       INSERT INTO turn_player_facts (id, player_id, character_id, scene_session_id, round_no, fact, created_at)
-      VALUES (?, ?, ?, '', 0, ?, ?)
+      VALUES (?, ?, ?, NULL, 0, ?, ?)
     `).run(id, playerId, cid, fact.trim(), ts);
 
     // 向量化

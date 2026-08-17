@@ -165,8 +165,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       // 删除朋友圈：NPC发的帖子 + NPC的评论/点赞 + moment_interactions经CASCADE清理
       db.prepare('DELETE FROM moment_interactions WHERE moment_id IN (SELECT id FROM moments WHERE player_id = ? AND author_id = ?)').run(playerId, characterId);
       db.prepare('DELETE FROM moments WHERE player_id = ? AND author_id = ?').run(playerId, characterId);
-      // NPC对该玩家帖子的评论/点赞
-      db.prepare('DELETE FROM moment_interactions WHERE author_type = ? AND author_id = ?').run('character', characterId);
+      // NPC对该玩家帖子的评论/点赞（限定当前玩家的 feed，避免越界删掉其他玩家朋友圈下该 NPC 的点赞/评论）
+      db.prepare('DELETE FROM moment_interactions WHERE author_type = ? AND author_id = ? AND moment_id IN (SELECT id FROM moments WHERE player_id = ?)').run('character', characterId, playerId);
 
       // 删除角色卡评论和点赞
       db.prepare('DELETE FROM character_comments WHERE character_id = ? AND player_id = ?').run(characterId, playerId);
