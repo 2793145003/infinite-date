@@ -204,6 +204,7 @@ export async function exploreRoutes(app: FastifyInstance): Promise<void> {
         temperature: 0.85,
         maxTokens: 1024,
         guidedJson: NARRATION_SCHEMA,
+        playerId,
       });
       const parsed = tryParseJsonReply(result.content);
       if (!parsed) throw new Error('探索场景生成解析失败');
@@ -385,6 +386,7 @@ export async function exploreRoutes(app: FastifyInstance): Promise<void> {
         temperature: 0.85,
         maxTokens: 768,
         guidedJson: NARRATION_SCHEMA,
+        playerId,
       });
       const parsed = tryParseJsonReply(result.content);
       if (!parsed) throw new Error('探索反馈解析失败');

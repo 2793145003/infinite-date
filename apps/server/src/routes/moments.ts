@@ -287,7 +287,7 @@ export async function generateNpcMoment(
   try {
     let content = '';
     for (let attempt = 0; attempt < 2 && !content; attempt++) {
-      const result = await chat(messages, { temperature: attempt === 0 ? 0.9 : 1.0, maxTokens: 512, guidedJson: REPLY_SCHEMA });
+      const result = await chat(messages, { temperature: attempt === 0 ? 0.9 : 1.0, maxTokens: 512, guidedJson: REPLY_SCHEMA, playerId });
       const parsed = tryParseJsonReply(result.content);
       if (parsed?.messages && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
         content = String(parsed.messages[0]).trim();
@@ -447,7 +447,7 @@ ${postImagePath ? '（这条动态附带了一张图片，请结合图片内容�
 
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const result = await chat(messages, { temperature: attempt === 0 ? 0.85 : 0.95, maxTokens: 512, guidedJson: REPLY_SCHEMA });
+      const result = await chat(messages, { temperature: attempt === 0 ? 0.85 : 0.95, maxTokens: 512, guidedJson: REPLY_SCHEMA, playerId });
       const parsed = tryParseJsonReply(result.content);
       if (parsed?.messages && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
         return String(parsed.messages[0]).trim() || null;

@@ -370,6 +370,7 @@ async function generateAndStoreDream(
   const result = await chat(messages, {
     temperature: 0.85,
     maxTokens: 512,
+    playerId,
     guidedJson: {
       type: 'object',
       properties: { dream: { type: 'string' } },
@@ -428,7 +429,7 @@ async function generateAndStoreDream(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: dreamSmsPrompt },
       ];
-      const reply_data = await generateReply(dreamMessages, { temperature: 0.9, maxTokens: 768 });
+      const reply_data = await generateReply(dreamMessages, { temperature: 0.9, maxTokens: 768, playerId });
 
       for (let i = 0; i < reply_data.messages.length; i++) {
         const msg = reply_data.messages[i]!;
@@ -563,7 +564,7 @@ async function generateScenarioGreeting(
   ];
 
   try {
-    const reply = await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+    const reply = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
     return {
       messages: reply.messages,
       internal: reply.internal,
@@ -587,6 +588,7 @@ async function judgeStats(
   statsBefore: Record<string, number>,
   playerMessage: string,
   npcReply: string,
+  playerId?: string,
 ): Promise<{ stats: Record<string, number>; changes: Array<{ name: string; delta: number; reason: string }>; goal_achieved: boolean; goal_reason: string } | null> {
   const statsRules = statsConfig.map(s => `· ${s.name}（当前${statsBefore[s.name] ?? s.initial}，目标${s.target ?? '无'}）：${s.rules}`).join('\n');
 
@@ -606,6 +608,7 @@ async function judgeStats(
   const result = await chat(messages, {
     temperature: 0.3,
     maxTokens: 512,
+    playerId,
     guidedJson: {
       type: 'object',
       properties: {
@@ -750,7 +753,7 @@ async function generateScenarioGroupGreeting(
   ];
 
   try {
-    return await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024 });
+    return await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024, playerId });
   } catch {
     return null;
   }

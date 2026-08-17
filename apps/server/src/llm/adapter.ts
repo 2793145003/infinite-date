@@ -37,14 +37,19 @@ interface EffectiveLlmConfig {
 }
 
 /**
- * 从DB读取用户配置的LLM参数，fallback到环境变量默认值。
- * SQLite单行查询，两人的游戏零开销，不需要缓存。
+ * 读取生效的 LLM 配置。
+ * 有 playerId → 优先该玩家的 per-player 配置（player_llm_configs），未填字段 fallback 到环境变量默认值。
+ * 无 playerId（系统级调用，无归属玩家）→ 直接走环境变量默认值。
+ * 注意：不再读全局 app_settings.llm_config（已废弃），默认值只来自环境变量/config。
  */
-function getEffectiveLlmConfig(): EffectiveLlmConfig {
-  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('llm_config') as { value: string } | undefined;
+function getEffectiveLlmConfig(playerId?: string): EffectiveLlmConfig {
   let dbConfig: Record<string, string> = {};
-  if (row?.value) {
-    try { dbConfig = JSON.parse(row.value); } catch { /* ignore */ }
+  if (playerId) {
+    const row = db.prepare('SELECT base_url, api_key, model FROM player_llm_configs WHERE player_id = ?').get(playerId) as
+      { base_url: string; api_key: string; model: string } | undefined;
+    if (row) {
+      dbConfig = { baseUrl: row.base_url, apiKey: row.api_key, model: row.model };
+    }
   }
   return {
     baseUrl: dbConfig.baseUrl || config.llmBaseUrl,
@@ -135,8 +140,9 @@ async function countPromptTokens(llm: { baseUrl: string; model: string }, apiMes
   } catch {
     // 网络错误/超时→回退
   }
-  // 回退：chars / 1.5（中文 1 字 ≈ 1.5 token 的真实比率，比旧的 chars/3 更准）
-  return Math.ceil(fallbackChars / 1.5) + imageCount * 768;
+  // 回退：用字符数本身作为 token 估算（中文 1 字常 1~2 token，取「1 字 ≈ 1 token」是保守下限；
+  // 旧的 chars/1.5 会把中文估低 2 倍以上，是「估算偏低 → 削减不够 → vLLM 400」的主要来源）
+  return Math.ceil(fallbackChars) + imageCount * 768;
 }
 
 export async function chat(
@@ -151,16 +157,20 @@ export async function chat(
     callType?: string;
     /** 关联的业务会话 id，用于 llm_call_log 回查 */
     sessionId?: string;
+    /** 归属玩家 id：用该玩家的 per-player LLM 配置；不传则用环境变量默认值（系统级调用） */
+    playerId?: string;
   },
 ): Promise<ChatResult> {
-  const llm = getEffectiveLlmConfig();
+  const llm = getEffectiveLlmConfig(opts?.playerId);
 
   const apiMessages = buildApiMessages(messages);
 
-  // 动态削减 max_tokens：保证 prompt_tokens + max_tokens <= MAX_MODEL_LEN - 32(安全余量)
+  // 动态削减 max_tokens：保证 prompt_tokens + max_tokens <= MAX_MODEL_LEN - 256(安全余量)
+  // 余量从 32 提到 256：countPromptTokens 估算有误差（/tokenize 可能不含特殊 token、回退 chars 估算偏
+  // 低），实测 prompt 15873 时估算偏低 33+，32 余量挡不住 → vLLM 报 400（15873 input + 512 output 超 16384）。
   const requestedMax = opts?.maxTokens ?? 1024;
   const estimatedPrompt = await countPromptTokens(llm, apiMessages);
-  const budget = MAX_MODEL_LEN - 32 - estimatedPrompt;
+  const budget = MAX_MODEL_LEN - 256 - estimatedPrompt;
   const maxTokens = budget < requestedMax
     ? Math.max(128, budget)   // 最少留 128 token 输出，实在不够就让它报错
     : requestedMax;
@@ -299,6 +309,8 @@ export async function chatJson<T extends object>(
     callType?: string;
     /** 关联的业务会话 id，透传给 llm_call_log */
     sessionId?: string;
+    /** 归属玩家 id，透传给 chat 用于 per-player LLM 配置 */
+    playerId?: string;
   },
 ): Promise<T | null> {
   const maxRetries = Math.max(0, opts.maxRetries ?? 2);
@@ -320,6 +332,7 @@ export async function chatJson<T extends object>(
       guidedJson: opts.schema,
       callType: opts.callType,
       sessionId: opts.sessionId,
+      playerId: opts.playerId,
     });
     if (res.truncated) {
       lastReason = '输出被截断（finish_reason=length），JSON 不完整';

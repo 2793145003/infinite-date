@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS player_llm_configs (
+  player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+  base_url   TEXT NOT NULL DEFAULT '',
+  api_key    TEXT NOT NULL DEFAULT '',
+  model      TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS players (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL DEFAULT 'Player',

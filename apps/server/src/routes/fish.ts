@@ -33,6 +33,7 @@ export async function fishRoutes(app: FastifyInstance) {
       const result = await chat(llmMessages, {
         temperature: 0.7,
         maxTokens: 1024,
+        playerId,
       });
 
       return { reply: result.content };
