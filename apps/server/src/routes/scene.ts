@@ -13,7 +13,7 @@ import { requireAuth } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
 import { ensureSceneSession } from '../lib/scene-session';
 import { ensureSceneMap, getNpcs, upsertNpc, getLocationBackground, addBackgroundSubmission, getBackgroundSubmissions } from '../lib/scene-map';
-import { advanceScene } from '../lib/scene-wiring';
+import { advanceScene, judgeMissionGoal } from '../lib/scene-wiring';
 import { rollbackScene } from '../lib/scene-rollback';
 import { getCharacterName, getCharacterAvatar, loadCharacterData, safeAvatar } from '../lib/character';
 import { getSceneSchedule, getSceneUpcomingSchedule } from '../lib/schedule';
@@ -39,6 +39,22 @@ function sceneLocationPath(locationId: string, cache = new Map<string, string>()
 function sceneHasChildren(locationId: string): boolean {
   const r = db.prepare('SELECT COUNT(*) as c FROM scene_locations WHERE parent_id = ? AND id NOT LIKE ?').get(locationId, 'temp-%') as { c: number };
   return (r?.c ?? 0) > 0;
+}
+
+/** mission 场景推进后补 goal 判定（约会场景不判「任务完成」）；返回是否达成及原因。 */
+async function judgeMissionGoalIfNeeded(
+  sessionId: string,
+  playerId: string,
+  playerMessage: string,
+  output: Array<{ kind: string; speaker?: string; content?: string }>,
+): Promise<{ goalAchieved: boolean; goalReason: string }> {
+  const sessType = db.prepare('SELECT scene_type FROM scene_sessions WHERE id = ?').get(sessionId) as { scene_type: string } | undefined;
+  if (sessType?.scene_type !== 'mission') return { goalAchieved: false, goalReason: '' };
+  const npcReply = output
+    .filter((o) => o.kind === 'character')
+    .map((o) => `${o.speaker ?? ''}：${o.content ?? ''}`)
+    .join('\n');
+  return judgeMissionGoal(sessionId, playerMessage, npcReply, playerId);
 }
 
 export async function sceneRoutes(app: FastifyInstance): Promise<void> {
@@ -433,6 +449,8 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
           });
         },
       });
+      // mission 场景补 goal 判定（约会场景不判「任务完成」）
+      const missionGoal = await judgeMissionGoalIfNeeded(sessionId, playerId, body.message ?? '', result.output);
       send({
         type: 'done',
         sessionId: result.sessionId,
@@ -442,6 +460,8 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
         locationId: result.locationId,
         locationName: result.locationName,
         locationBackground: result.locationBackground ?? '',
+        goalAchieved: missionGoal.goalAchieved,
+        goalReason: missionGoal.goalReason,
       });
       raw.end();
     } catch (e: any) {
@@ -496,6 +516,8 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
           });
         },
       });
+      // mission 场景补 goal 判定（约会场景不判「任务完成」）
+      const missionGoal = await judgeMissionGoalIfNeeded(sessionId, playerId, '', result.output);
       send({
         type: 'done',
         sessionId: result.sessionId,
@@ -505,6 +527,8 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
         locationId: result.locationId,
         locationName: result.locationName,
         locationBackground: result.locationBackground ?? '',
+        goalAchieved: missionGoal.goalAchieved,
+        goalReason: missionGoal.goalReason,
       });
       raw.end();
     } catch (e: any) {

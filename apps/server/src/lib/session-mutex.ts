@@ -46,8 +46,8 @@ export type LiveSlot =
  * 结构与 session-mutex 其它检查函数一致，放这里避免循环依赖。
  */
 export function getActiveLiveSlot(playerId: string): LiveSlot | null {
-  // 新地图约会（scene）
-  const scene = db.prepare('SELECT id FROM scene_sessions WHERE player_id = ? AND ended = 0 ORDER BY updated_at DESC LIMIT 1').get(playerId) as { id: string } | undefined;
+  // 新地图约会（scene）——只认 scene_type='date'，避免把 mission/scenario 的进行中会话误判成约会现场
+  const scene = db.prepare("SELECT id FROM scene_sessions WHERE player_id = ? AND ended = 0 AND scene_type = 'date' ORDER BY updated_at DESC LIMIT 1").get(playerId) as { id: string } | undefined;
   if (scene) return { type: 'scene-date', sessionId: scene.id };
 
   // 旧约会/群聊（conversation）

@@ -18,10 +18,9 @@ export function clearToken(): void {
   localStorage.removeItem('idate_token');
 }
 
-/** 构建带认证token的图片URL（<img>标签无法自定义header，过渡期仍用 query token） */
+/** 构建图片URL（<img>标签自动携带 httpOnly cookie 认证，不再用 query token，避免 token 泄漏） */
 export function imageUrl(filename: string): string {
-  const token = getToken();
-  return `${API_BASE}/uploads/${filename}${token ? `?token=${token}` : ''}`;
+  return `${API_BASE}/uploads/${filename}`;
 }
 
 // 全局 401 回调：token 失效时回到登录页
@@ -249,15 +248,13 @@ export const api = {
     }),
 
   getConversationMessages: (sessionId: string) =>
-    request<{ session: { character_id: string; ended: number }; messages: { id: string; role: string; text: string; image_path: string | null; internal: string; internal_notable: number; internal_viewed: number; created_at: number }[]; isFriend: boolean; missionInfo: { worldName: string; item: string; briefing: string } | null }>(`/sessions/${sessionId}/messages`),
+    request<{ session: { character_id: string; ended: number }; messages: { id: string; role: string; text: string; image_path: string | null; internal: string; internal_notable: number; internal_viewed: number; created_at: number }[]; isFriend: boolean }>(`/sessions/${sessionId}/messages`),
 
   sendConversationMessage: (sessionId: string, text: string, imagePath?: string, quoteId?: string, quoteText?: string, quoteSenderName?: string) =>
     request<{
       playerMessage: { id: string; text: string; imagePath: string | null };
       npcMessages: NpcReply[];
       scene_concluded?: boolean;
-      environment?: string;
-      quest_npc_line?: string;
       currentLocationName?: string;
     }>(`/sessions/${sessionId}/send`, {
       method: 'POST',
@@ -274,7 +271,7 @@ export const api = {
     request<{ ok: boolean }>(`/sessions/${sessionId}/undo`, { method: 'DELETE' }),
 
   retryConversation: (sessionId: string) =>
-    request<{ npcMessages: NpcReply[]; environment?: string; quest_npc_line?: string; scene_concluded?: boolean; currentLocationName?: string }>(`/sessions/${sessionId}/retry`, { method: 'POST' }),
+    request<{ npcMessages: NpcReply[]; scene_concluded?: boolean; currentLocationName?: string }>(`/sessions/${sessionId}/retry`, { method: 'POST' }),
 
   nudgeConversation: (sessionId: string) =>
     request<{ npcMessages: NpcReply[] }>(`/sessions/${sessionId}/nudge`, { method: 'POST' }),
@@ -335,6 +332,9 @@ export const api = {
   retrySms: (threadId: string) =>
     request<{ npcMessages: NpcReply[]; invite?: SmsInvite }>(`/sms/threads/${threadId}/retry`, { method: 'POST' }),
 
+  retryDreamSms: (threadId: string) =>
+    request<{ npcMessages: NpcReply[] }>(`/sms/threads/${threadId}/retry-dream`, { method: 'POST' }),
+
   regenerateSmsGreeting: (threadId: string) =>
     request<{ npcMessages: NpcReply[] }>(`/sms/threads/${threadId}/regenerate-greeting`, { method: 'POST' }),
 
@@ -366,7 +366,6 @@ export const api = {
       playerMessage: { id: string; text: string };
       npcMessages: NpcReply[];
       scene_concluded: boolean;
-      item_obtained: boolean | null;
     }>(`/sessions/${sessionId}/send`, {
       method: 'POST',
       body: JSON.stringify({ text }),
@@ -582,8 +581,23 @@ export const api = {
     request<{ ok: boolean }>('/presence', { method: 'DELETE' }),
 
   // ─── 任务系统 ──────────────────────────────────────────
-  generateMission: () =>
-    request<{ missionId: string; world: { id: string; name: string; summary: string; tone: string; briefing: string; item: string; obsession: string } }>('/missions/generate', { method: 'POST' }),
+  divine: (cast: number[]) =>
+    request<DivineResult>('/missions/divine', {
+      method: 'POST',
+      body: JSON.stringify({ cast }),
+    }),
+
+  generateMission: (cast?: number[]) =>
+    request<{ missionId: string; world: { id: string; name: string; summary: string; tone: string; briefing: string; worldTension: string; targetState: string; hexagram: string } }>('/missions/generate', {
+      method: 'POST',
+      body: cast ? JSON.stringify({ cast }) : undefined,
+    }),
+
+  prepareMission: (cast: number[]) =>
+    request<{ preparing: boolean; missionId: string; guaXiang: string; name: string; lines: number[]; dong: number[] }>('/missions/prepare', {
+      method: 'POST',
+      body: JSON.stringify({ cast }),
+    }),
 
   getMissions: () =>
     request<{ missions: MissionInfo[] }>('/missions'),
@@ -596,6 +610,12 @@ export const api = {
 
   declineMission: (missionId: string) =>
     request<{ ok: boolean }>(`/missions/${missionId}/decline`, { method: 'POST' }),
+
+  endMission: (sessionId: string) =>
+    request<{ ok: boolean; missionId?: string }>('/missions/end', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
 
   getMissionFriends: () =>
     request<{ friends: { characterId: string; name: string }[] }>('/missions/friends'),
@@ -1045,9 +1065,20 @@ export const api = {
       dreamCustom: boolean;
       worldview: string;
       playerRole: string;
+      companionRole: string;
       goal: string;
       ambientConfig: string;
       openingScene: string;
+      missionTitle: string;
+      missionInfo: {
+        briefing?: string;
+        worldTension?: string;
+        targetState?: string;
+        missionGoal?: string;
+        worldName?: string;
+        landmarks?: { name: string; feature: string }[];
+        coreNpcs?: { role: string; name: string; persona: string }[];
+      } | null;
     }>(`/scene-scenario/${sessionId}`),
 
   getActiveSceneScenario: () =>
@@ -1132,6 +1163,7 @@ export interface ThreadInfo {
   last_sender?: string;
   unread_count: number;
   last_message_at: number | null;
+  online_state?: 'online' | 'sleep' | 'mission';
 }
 
 export interface TextMessage {
@@ -1155,7 +1187,6 @@ export interface NpcReply {
   internal: string;
   internal_notable: boolean;
   internal_viewed: boolean;
-  environment?: string;
 }
 
 export interface SmsInvite {
@@ -1166,6 +1197,8 @@ export interface SmsInvite {
 export interface EmailInfo {
   id: string;
   sender_type: string;
+  character_id?: string | null;
+  sender_name?: string;
   subject: string;
   body: string;
   is_read: number;
@@ -1215,24 +1248,39 @@ export interface PresenceResponse {
   messages?: ProactiveMessage[];
 }
 
+export interface DivineResult {
+  guaXiang: string;   // 卦象名，如"地天泰"
+  name: string;       // 卦名，如"泰"
+  lines: number[];    // 六爻阴阳 [0阴1阳，初→上]
+  dong: number[];     // 动爻位 [1-6]
+  shichen: string;
+  dayGanZhi: string;
+}
+
 export interface MissionInfo {
   id: string;
   questType: string;
-  status: 'available' | 'active' | 'completed' | 'declined';
+  status: 'available' | 'active' | 'completed' | 'declined' | 'preparing' | 'failed';
   title: string;
   description: string;
   reward: number;
   worldName: string | null;
-  item: string;
-  obsession: string;
+  missionGoal?: string;
+  item?: string;
+  obsession?: string;
   briefing: string;
+  hexagram?: { ben?: string; bian?: string; hu?: string; dong?: number[]; lines?: number[] } | null;
+  descendIdentity?: { player: string; maleLead: string } | null;
   landmarks: { name: string; feature: string }[];
-  minorCharacters: { name: string; trait: string }[];
+  minorCharacters?: { name: string; trait: string }[];
+  worldNpcs?: { role: string; name: string; persona: string }[];
   worldTension: string;
+  targetState?: string;
   missionHook: string;
   twistSeed: string;
   characterId: string | null;
-  evaluationResult: { item_obtained: boolean; obsession_resolved: boolean; cooperation_quality: string; summary: string } | null;
+  sessionId?: string | null;
+  evaluationResult: { goal_achieved: boolean; cooperation_quality: string; summary: string } | null;
   ratingScore: number | null;
   createdAt: number;
   startedAt: number | null;

@@ -5,13 +5,12 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db';
 import { requireAuth } from '../lib/auth';
-import { genId, now, jsonParse } from '../lib/util';
-import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, buildMissionWorldContext, applyMissionRules, type PromptContext, buildGroupSystemPrompt, buildGroupMessages, generateGroupReply, type GroupCharContext } from '../prompt/builder';
+import { genId, now } from '../lib/util';
+import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, type PromptContext, buildGroupSystemPrompt, buildGroupMessages, generateGroupReply, type GroupCharContext } from '../prompt/builder';
 import { generateConversationProactive } from '../lib/presence';
 import { resetSmsUrge, initUrge, clearUrgeAfterDate } from '../lib/proactive';
 import { getCurrentSchedule } from '../lib/schedule';
 import { retrieveRelevantMemories, foldChronicle, maybeFoldIncremental, maybeFoldSmsIncremental, getUnifiedTimeline, foldGroupChronicle, maybeFoldGroupIncremental } from '../lib/memory';
-import { evaluateWorldMission, generateMissionGreeting } from './mission';
 import { spendPlayerPermission } from '../lib/permission';
 import { getCosts } from '../lib/permission-config';
 import { loadCharacterData, getCharacterName } from '../lib/character';
@@ -182,21 +181,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const isFriend = session.character_id === DEITY_ID ? true :
       !!db.prepare('SELECT 1 FROM friendships WHERE player_id = ? AND character_id = ? AND status = ?').get(playerId, session.character_id, 'active');
 
-    // 查询任务信息（mission session时附带）
-    let missionInfo: { worldName: string; item: string; briefing: string } | null = null;
-    if (session.mission_id) {
-      const mission = db.prepare(`
-        SELECT w.name, m.metadata
-        FROM missions m JOIN worlds w ON m.world_id = w.id
-        WHERE m.id = ?
-      `).get(session.mission_id) as { name: string; metadata: string } | undefined;
-      if (mission) {
-        const meta = jsonParse<{ item: string; briefing: string }>(mission.metadata, { item: '', briefing: '' });
-        missionInfo = { worldName: mission.name, item: meta.item, briefing: meta.briefing };
-      }
-    }
-
-    return reply.send({ session, messages, isFriend, missionInfo });
+    return reply.send({ session, messages, isFriend });
   });
 
   // 获取进行中的约会
@@ -310,47 +295,16 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       currentLocationName = loc?.name ?? '';
     }
 
-    // 任务世界设定注入（mission session）— 使用buildMissionWorldContext注入推进指令
     let worldContext: string | undefined = undefined;
-    if (session.mission_id) {
-      const mission = db.prepare(`
-        SELECT m.metadata, w.name, w.summary, w.tone, w.rules, w.lore
-        FROM missions m JOIN worlds w ON m.world_id = w.id
-        WHERE m.id = ?
-      `).get(session.mission_id) as { metadata: string; name: string; summary: string; tone: string; rules: string; lore: string } | undefined;
-      if (mission) {
-        const meta = jsonParse<{ item: string; obsession: string; briefing: string;
-          landmarks?: { name: string; feature: string }[];
-          minor_characters?: { name: string; trait: string }[];
-          world_tension?: string; mission_hook?: string; twist_seed?: string;
-        }>(mission.metadata, { item: '', obsession: '', briefing: '' });
-        // 对话轮数 = 已有的player消息数（包含当前这条）
-        const turnCount = db.prepare(`
-          SELECT COUNT(*) as cnt FROM messages WHERE session_id = ? AND role = 'player'
-        `).get(sessionId) as { cnt: number };
-        worldContext = buildMissionWorldContext(
-          { name: mission.name, summary: mission.summary, tone: mission.tone, rules: mission.rules, lore: mission.lore },
-          meta,
-          turnCount.cnt,
-        );
-      }
-    }
 
     // 获取关系和记忆
     const rel = db.prepare(`
       SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?
     `).get(playerId, session.character_id) as { player_description: string; created_at: number } | undefined;
 
-    // 获取最近消息（排除narration旁白）
-    // mission模式下保留quest_npc消息（映射为user角色+前缀注入对话流），
-    // 让NPC能在对话流中看到执念持有者说过什么，形成真正的交互呼应
-    const isMissionSession = !!session.mission_id;
+    // 获取最近消息（排除narration旁白、quest_npc）
     const recentMsgs = db.prepare(`
-      SELECT role, text FROM messages WHERE session_id = ? AND created_at < ? ${
-        isMissionSession
-          ? "AND role NOT IN ('narration')"
-          : "AND role NOT IN ('narration', 'quest_npc')"
-      } ORDER BY created_at DESC LIMIT 20
+      SELECT role, text FROM messages WHERE session_id = ? AND created_at < ? AND role NOT IN ('narration', 'quest_npc') ORDER BY created_at DESC LIMIT 20
     `).all(sessionId, ts) as Array<{ role: string; text: string }>;
 
     // 记忆检索（Phase 5）
@@ -370,8 +324,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       chronicleSummary: getUnifiedTimeline(playerId, session.character_id),
       recentMessages: recentMsgs.reverse().map(m => ({
         role: (m.role === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
-        // mission模式：quest_npc消息加前缀注入对话流，让NPC知道执念持有者说了什么
-        text: m.role === 'quest_npc' ? `[执念持有者]：${m.text}` : m.text,
+        text: m.text,
       })),
       isTextMessage: false,
       isDeity,
@@ -392,7 +345,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      let reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+      let reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
       // 短输入且NPC请求搜索记忆：检索后重新生成
       if (!isDeity) {
@@ -405,15 +358,12 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
           if (imagePath && enrichedMessages.length > 0) {
             enrichedMessages[enrichedMessages.length - 1]!.imagePath = imagePath;
           }
-          const enrichedReply = await generateReply(enrichedMessages, { temperature: 0.85, maxTokens: 1024 });
+          const enrichedReply = await generateReply(enrichedMessages, { temperature: 0.85, maxTokens: 1024, playerId });
           reply_data = { ...enrichedReply, need_search: false, search_query: '' };
         }
       }
 
-      // 任务模式：物品未到手时强制不收束
-      const isMission = !!session.mission_id;
-      const missionItemObtained = isMission && reply_data.item_obtained === true;
-      const finalReply = isMission ? applyMissionRules(reply_data, missionItemObtained) : reply_data;
+      const finalReply = reply_data;
 
       // 地点移动：LLM 返回 current_location 时，匹配 locations 表更新 session
       let updatedLocationName = currentLocationName || locationName;
@@ -430,22 +380,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      // 任务模式：存environment旁白（作为narration消息）
-      if (isMission && finalReply.environment) {
-        db.prepare(`
-          INSERT INTO messages (id, session_id, role, text, metadata, internal, internal_notable, internal_viewed, created_at)
-          VALUES (?, ?, 'narration', ?, '{}', '', 0, 0, ?)
-        `).run(genId(), sessionId, finalReply.environment, now());
-      }
-
-      // 任务模式：存任务对象台词（作为quest_npc角色消息）
-      if (isMission && finalReply.quest_npc_line) {
-        db.prepare(`
-          INSERT INTO messages (id, session_id, role, text, metadata, internal, internal_notable, internal_viewed, created_at)
-          VALUES (?, ?, 'quest_npc', ?, '{}', '', 0, 0, ?)
-        `).run(genId(), sessionId, finalReply.quest_npc_line, now());
-      }
-
       // 存NPC回复
       const npcSave = saveNpcReply('messages', 'session_id', sessionId, finalReply.messages, finalReply.internal, finalReply.internal_notable);
       const npcMsgIds = npcSave.msgIds;
@@ -455,12 +389,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       // 更新player_description
       if (!isDeity) {
         updatePlayerDescription(playerId, session.character_id, finalReply.player_description, rel?.player_description, 'conversation', playerMsgId);
-      }
-
-      // 世界任务：物品到手标记
-      if (finalReply.item_obtained === true && session.mission_id) {
-        db.prepare("UPDATE missions SET status = 'completed' WHERE id = ? AND status = 'active'")
-          .run(session.mission_id);
       }
 
       // 场景自然结束
@@ -482,10 +410,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
           internal_notable: i === 0 && finalReply.internal_notable,
           internal_viewed: false,
         })),
-        environment: isMission ? finalReply.environment : undefined,
-        quest_npc_line: isMission ? finalReply.quest_npc_line : undefined,
         scene_concluded: finalReply.scene_concluded,
-        item_obtained: finalReply.item_obtained,
         currentLocationName: updatedLocationName,
       });
     } catch (err) {
@@ -534,16 +459,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         }
       } else {
         // 单聊逻辑（不变）
-
-        // 世界任务评级（异步，不阻塞响应）
-        if (sessionRow.mission_id) {
-          const mission = db.prepare('SELECT world_id FROM missions WHERE id = ?').get(sessionRow.mission_id) as { world_id: string } | undefined;
-          if (mission?.world_id) {
-            evaluateWorldMission(sessionRow.mission_id, playerId, sessionId, mission.world_id).catch((err) => {
-              app.log.error({ err }, '世界任务评级失败');
-            });
-          }
-        }
 
         foldChronicle(sessionId, playerId, sessionRow.character_id, null).catch(() => {});
         // 约会结束 → 清零意愿（约会结束已直发短信+朋友圈）
@@ -642,15 +557,29 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const session = db.prepare('SELECT id FROM conversation_sessions WHERE id = ? AND player_id = ? AND ended = 0').get(sessionId, playerId);
     if (!session) return reply.code(404).send({ error: '约会不存在或已结束' });
 
-    // 消耗权限
-    const undoCost = getCosts().undo_message;
-    const spendResult = spendPlayerPermission(playerId, undoCost, 'undo');
-    if (!spendResult.ok) {
-      return reply.code(403).send({ error: `权限不足（需要${undoCost}）` });
-    }
+    // 先删后扣 + 包事务：任一步失败 ROLLBACK，不产生"白扣费"（修复先扣费后校验的 bug）
+    db.exec('BEGIN');
+    try {
+      const undoResult = undoLastPlayerMessage({ table: 'messages', idColumn: 'session_id', idValue: sessionId, playerRole: 'player', roleColumn: 'role' });
+      if (!undoResult.ok) {
+        db.exec('ROLLBACK');
+        return reply.code(undoResult.code).send({ error: undoResult.error });
+      }
 
-    const undoResult = undoLastPlayerMessage({ table: 'messages', idColumn: 'session_id', idValue: sessionId, playerRole: 'player', roleColumn: 'role' });
-    if (!undoResult.ok) return reply.code(undoResult.code).send({ error: undoResult.error });
+      // 删除已确认成功，此时才扣费；余额不足则回滚删除
+      const undoCost = getCosts().undo_message;
+      const spendResult = spendPlayerPermission(playerId, undoCost, 'undo');
+      if (!spendResult.ok) {
+        db.exec('ROLLBACK');
+        return reply.code(403).send({ error: `权限不足（需要${undoCost}）` });
+      }
+
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* 事务可能已不在 */ }
+      app.log.error({ err }, '约会撤回失败');
+      return reply.code(500).send({ error: '撤回失败，请重试' });
+    }
 
     return reply.send({ ok: true });
   });
@@ -670,33 +599,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       // Greeting重试：session里没有player消息，说明只有开场白
       db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId);
 
-      let greetingResult: { environment: string; messages: string[]; internal: string; internal_notable: boolean };
+      let greetingResult: { messages: string[]; internal: string; internal_notable: boolean };
 
-      if (session.mission_id) {
-        // 任务greeting重试
-        const mission = db.prepare(`
-          SELECT m.metadata, w.name, w.summary, w.tone, w.rules, w.lore
-          FROM missions m JOIN worlds w ON m.world_id = w.id
-          WHERE m.id = ?
-        `).get(session.mission_id) as { metadata: string; name: string; summary: string; tone: string; rules: string; lore: string } | undefined;
-        if (!mission) {
-          return reply.code(500).send({ error: '任务数据缺失' });
-        }
-        const meta = jsonParse<{ item: string; obsession: string; briefing: string;
-          landmarks?: { name: string; feature: string }[];
-          minor_characters?: { name: string; trait: string }[];
-          world_tension?: string; mission_hook?: string; twist_seed?: string;
-        }>(mission.metadata, { item: '', obsession: '', briefing: '' });
-        try {
-          greetingResult = await generateMissionGreeting(
-            sessionId, playerId, session.character_id,
-            { id: session.mission_id, name: mission.name, summary: mission.summary, tone: mission.tone, rules: mission.rules, lore: mission.lore },
-            meta,
-          );
-        } catch {
-          return reply.code(502).send({ error: '开场白重新生成失败' });
-        }
-      } else {
+      {
         // 普通greeting重试
         // 判断是否初见：relationship的created_at >= session的created_at说明是本session创建时建的
         const rel2 = db.prepare('SELECT created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, session.character_id) as { created_at: number } | undefined;
@@ -707,7 +612,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
             return reply.code(502).send({ error: '开场白重新生成失败' });
           }
           greetingResult = {
-            environment: g.environment ?? '',
             messages: g.messages,
             internal: g.internal,
             internal_notable: g.internal_notable,
@@ -718,12 +622,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // 存greeting消息
-      if (session.mission_id && greetingResult.environment) {
-        db.prepare(`
-          INSERT INTO messages (id, session_id, role, text, metadata, internal, internal_notable, internal_viewed, created_at)
-          VALUES (?, ?, 'narration', ?, '{}', '', 0, 0, ?)
-        `).run(genId(), sessionId, greetingResult.environment, now());
-      }
       const npcMsgIds: string[] = [];
       for (let i = 0; i < greetingResult.messages.length; i++) {
         const msg = greetingResult.messages[i]!;
@@ -745,8 +643,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
           internal: i === 0 ? greetingResult.internal : '',
           internal_notable: i === 0 && greetingResult.internal_notable,
         })),
-        environment: session.mission_id ? greetingResult.environment : undefined,
-        quest_npc_line: undefined,
         scene_concluded: false,
         currentLocationName: '',
       });
@@ -797,32 +693,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       if (loc) currentLocationName = loc.name;
     }
 
-    // 任务世界设定注入（mission session）— 使用buildMissionWorldContext注入推进指令
-    let retryWorldContext: string | undefined = undefined;
-    if (session.mission_id) {
-      const mission = db.prepare(`
-        SELECT m.metadata, w.name, w.summary, w.tone, w.rules, w.lore
-        FROM missions m JOIN worlds w ON m.world_id = w.id
-        WHERE m.id = ?
-      `).get(session.mission_id) as { metadata: string; name: string; summary: string; tone: string; rules: string; lore: string } | undefined;
-      if (mission) {
-        const meta = jsonParse<{ item: string; obsession: string; briefing: string }>(mission.metadata, { item: '', obsession: '', briefing: '' });
-        // retry时不增加轮数，用已有的player消息数（不含当前这条，因为已被删除的NPC回复对应的player消息还在）
-        const turnCount = db.prepare(`
-          SELECT COUNT(*) as cnt FROM messages WHERE session_id = ? AND role = 'player'
-        `).get(sessionId) as { cnt: number };
-        // 取最近的执念持有者台词（retry已删除旧NPC回复但quest_npc台词在player消息之前的仍保留）
-        const recentQuestLines = db.prepare(`
-          SELECT text FROM messages WHERE session_id = ? AND role = 'quest_npc' ORDER BY created_at DESC LIMIT 5
-        `).all(sessionId) as Array<{ text: string }>;
-        retryWorldContext = buildMissionWorldContext(
-          { name: mission.name, summary: mission.summary, tone: mission.tone, rules: mission.rules, lore: mission.lore },
-          meta,
-          turnCount.cnt,
-          recentQuestLines.map(r => r.text).reverse(),
-        );
-      }
-    }
+    const retryWorldContext: string | undefined = undefined;
 
     // 记忆检索（Phase 5）
     let retrievedMemories: string | null = null;
@@ -862,12 +733,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
-      // 任务模式：物品未到手时强制不收束
-      const isMission = !!session.mission_id;
-      const missionItemObtained = isMission && reply_data.item_obtained === true;
-      const finalReply = isMission ? applyMissionRules(reply_data, missionItemObtained) : reply_data;
+      const finalReply = reply_data;
 
       // 地点移动：LLM 返回 current_location 时，匹配 locations 表更新 session
       let updatedLocationName = currentLocationName || locationName;
@@ -882,22 +750,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      // 任务模式：存environment旁白
-      if (isMission && finalReply.environment) {
-        db.prepare(`
-          INSERT INTO messages (id, session_id, role, text, metadata, internal, internal_notable, internal_viewed, created_at)
-          VALUES (?, ?, 'narration', ?, '{}', '', 0, 0, ?)
-        `).run(genId(), sessionId, finalReply.environment, now());
-      }
-
-      // 任务模式：存任务对象台词
-      if (isMission && finalReply.quest_npc_line) {
-        db.prepare(`
-          INSERT INTO messages (id, session_id, role, text, metadata, internal, internal_notable, internal_viewed, created_at)
-          VALUES (?, ?, 'quest_npc', ?, '{}', '', 0, 0, ?)
-        `).run(genId(), sessionId, finalReply.quest_npc_line, now());
-      }
-
       const npcSave = saveNpcReply('messages', 'session_id', sessionId, finalReply.messages, finalReply.internal, finalReply.internal_notable);
       const npcMsgIds = npcSave.msgIds;
 
@@ -905,8 +757,6 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
       return reply.send({
         npcMessages: npcSave.formattedMessages,
-        environment: isMission ? finalReply.environment : undefined,
-        quest_npc_line: isMission ? finalReply.quest_npc_line : undefined,
         scene_concluded: finalReply.scene_concluded,
         currentLocationName: updatedLocationName,
       });
@@ -1167,7 +1017,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const messages = buildGroupMessages(systemPrompt, recentForPrompt, quotePrefix + textBody);
 
     try {
-      const groupReply = await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024 });
+      const groupReply = await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024, playerId });
 
       // 存NPC消息
       const npcMsgIds: string[] = [];
@@ -1281,7 +1131,7 @@ async function generateGroupGreeting(
   ];
 
   try {
-    const reply = await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024 });
+    const reply = await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024, playerId });
     return {
       messages: reply.messages,
       internals: reply.internals,
@@ -1391,7 +1241,7 @@ export async function generateGreeting(
   ];
 
   try {
-    return await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+    return await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
   } catch {
     return null;
   }

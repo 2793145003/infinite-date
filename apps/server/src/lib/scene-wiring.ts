@@ -86,6 +86,22 @@ export interface AdvanceSceneResult {
   locationBackground: string;
 }
 
+// ─── 任务 NPC 定位 ─────────────────────────────────────
+
+/** 任务 NPC 的定位：按 role 映射成角色视角的一句话，不用「贵人/对手」剧作词。role 缺失时按普通居民兜底。 */
+function roleStance(role: string, playerName: string): string {
+  const map: Record<string, string> = {
+    '任务核心对象': '你就是这个困境里陷得最深、最需要被拉一把的那个人。',
+    '贵人': `你愿意帮 ${playerName} 一把——按你的性格和立场，你会主动搭手。`,
+    '靠山': `你平时不显眼，但紧要关头能实打实地帮上 ${playerName}。`,
+    '对手': `你对 ${playerName} 这些外来者不信任、有戒心，不会轻易配合。`,
+    '竞争者': `你和 ${playerName} 在争同一件事，但未必是敌人。`,
+    '所求之人': `你就是 ${playerName} 这次要找、要见的那个人。`,
+  };
+  const stance = map[role] ?? `你是这个世界的居民，${playerName} 是来帮助这个世界（和这里的人）的，按你的立场自然地向他们求助或配合。`;
+  return stance + '注意保持角色人设。';
+}
+
 // ─── 玩家画像 ─────────────────────────────────────────
 
 /**
@@ -226,9 +242,13 @@ function buildSceneContext(session: any): SceneContext {
   const summary = loc?.summary || '';
 
   // 路人（地点在场的固定工具人）
+  // 任务场景：世界 NPC 挂根地点、始终在场，不随 move 走（move 只是换地点背景，NPC 不是"到了才刷新"）；
+  // 约会场景：随当前地点走。
   let residentNpcs = '';
-  if (loc?.npcs) {
-    const npcs = jsonParse<SceneNpc[]>(loc.npcs, []);
+  const npcLocId = session.scene_type === 'mission' ? (session.root_location_id || effLocId) : effLocId;
+  const npcLoc = npcLocId === effLocId ? loc : db.prepare('SELECT npcs FROM scene_locations WHERE id = ?').get(npcLocId) as any;
+  if (npcLoc?.npcs) {
+    const npcs = jsonParse<SceneNpc[]>(npcLoc.npcs, []);
     if (npcs.length) {
       residentNpcs = npcs
         .map((n) => `${n.name}（${n.role}）：${n.persona}`)
@@ -245,6 +265,39 @@ function buildSceneContext(session: any): SceneContext {
   // 场景基调/规则（用地点 summary + 固定 tone/rules）
   let tone = summary ? `地点氛围：${summary}` : '温馨放松';
   let rules = '注意保持角色人设，推进关系自然。';
+
+  // 任务模式：注入任务世界观（世界困境）+ 目标（目标态）+ 开局情境
+  if (session.scene_type === 'mission') {
+    const worldview = session.worldview || '';
+    const playerRole = session.player_role || '';
+    const npcRoles = parseNpcRoles(session.npc_roles);
+    const goal = session.goal || '';
+    const openingScene = session.opening_scene || '';
+    // 玩家昵称：避免"玩家/男主"这类剧作术语——小模型不知道"男主"是什么，一律用名字/角色视角描述指代
+    const playerNickname = (db.prepare('SELECT name FROM players WHERE id = ?').get(session.player_id) as any)?.name || '';
+    if (worldview) {
+      tone = `任务世界：${worldview}` + (summary ? `\n地点氛围：${summary}` : '');
+    }
+    const missionRules: string[] = [];
+    const mainName = playerNickname || '对方';
+    if (playerRole) missionRules.push(`来帮助这个世界的人：${playerRole.replace(/你/g, mainName)}`);
+    if (npcRoles.length) {
+      // male_lead 视角可能用"他"指男主，注入演员 prompt 时"他"指代男主自己，改写为男主名（兜底；accept 落库已清洗，这里防旧数据/漏网）
+      const companionName = characterIds.length ? (getCharacterName(characterIds[0]!) ?? '') : '';
+      missionRules.push(npcRoles.map((r) => {
+        const desc = companionName ? r.description.replace(/他|她/g, companionName) : r.description;
+        // 去掉 desc 开头的「{男主名}是」，避免与元认知前缀连读成「方知衡是…方知衡是」病句
+        const body = companionName && desc.startsWith(companionName)
+          ? desc.slice(companionName.length).replace(/^是/, '')
+          : desc;
+        return `同行的同伴：${companionName} 是主城的 NPC，和 ${mainName} 一起降临到这个世界，降临身份是——${body}`;
+      }).join('\n'));
+    }
+    if (goal) missionRules.push(`任务目标：${goal}`);
+    if (openingScene) missionRules.push(`开局情境：${openingScene}`);
+    missionRules.push(`这是任务世界：${mainName}是降临到此、来帮助这个世界（或世界里的人）走向目标态的人。`);
+    rules = missionRules.join('\n');
+  }
 
   // 特殊开场情境：被房主逮到（caught） / 玩家走近被注意到（approach） —— 从 scene.greeting 模板按情境取
   let circumstancePrefix = '';
@@ -475,6 +528,19 @@ export async function advanceScene(
   const log = opts?.onLog ?? (() => {});
   const quote = opts?.quote ?? null;
 
+  // 重试/继续空推轮（本轮无新玩家发言）：从 DB 读玩家最后一条消息，
+  // 用于 ① 引用上下文（仅重试 regenerate）② 记忆折叠输入（重试+继续）。
+  // 只借文本/引用，绝不落库玩家消息（上一轮已落库，避免多出一条）。
+  const lastPlayerRow = (!playerMessage || !playerMessage.trim())
+    ? db.prepare(
+        "SELECT text, quote FROM scene_messages WHERE scene_session_id = ? AND role = 'player' ORDER BY round_no DESC, created_at DESC LIMIT 1"
+      ).get(sessionId) as { text: string; quote: string | null } | undefined
+    : undefined;
+  // 重试重新生成「回应玩家上一条发言」时补回引用上下文（正常 advance 由 opts.quote 传入）
+  const effectiveQuote = quote ?? (opts?.regenerate && lastPlayerRow?.quote
+    ? (jsonParse(lastPlayerRow.quote, null) as { quoteId?: string; quoteText?: string; quoteSenderName?: string } | null)
+    : null);
+
   // 1) 读会话
   const session = db.prepare(
     'SELECT * FROM scene_sessions WHERE id = ? AND player_id = ?'
@@ -519,7 +585,9 @@ export async function advanceScene(
   // 主角（character_ids）不受此影响，始终跟着玩家。
   // 剧本模式无地点概念，跳过路人。
   const isScenario = session.scene_type === 'scenario';
-  const rNpcs = isScenario ? [] : getNpcs(session.current_location_id || session.root_location_id);
+  const rNpcs = isScenario ? [] : (session.scene_type === 'mission'
+    ? getNpcs(session.root_location_id || session.current_location_id || '')  // 任务场景：世界 NPC 挂根地点、始终在场，不随 move 走
+    : getNpcs(session.current_location_id || session.root_location_id));
   for (const n of rNpcs) {
     const key = n.name;
     if (actorsBase[key]) continue; // 与主角重名则跳过
@@ -556,15 +624,33 @@ export async function advanceScene(
 
   const actors: SceneTurnInput['actors'] = {};
   const npcById = new Map(rNpcs.map((n) => [n.id, n]));
+  // 任务场景：同伴（男主）与任务 NPC 立场不同，逐人注入各自那句，不写「若你是……」让模型自己猜
+  const isMission = session.scene_type === 'mission';
   for (const a of actorOrder) {
     let actorCurrentActivity = '';
     const npc = npcById.get(a.characterId);
+    let stance = '';
+    if (isMission) {
+      if (npc) {
+        // 任务 NPC：按 role 给定位（角色视角，不用「贵人/对手」剧作词；role 缺失则按普通居民兜底）
+        stance = roleStance(npc.role, playerName);
+      } else {
+        // 男主：先看任务世界的人物名单（只有名字+人设，不给 role，六亲关系仍隐藏），再给同伴立场
+        const npcList = rNpcs.map((n) => `${n.name}：${n.persona}`).join('\n');
+        // 男主只握「人际情报」（谁可能知道内情），不握「真相」——卡关时揪出知情者，而不是自己泄底。
+        const intelNames = rNpcs.filter((n) => n.clues?.length).map((n) => n.name);
+        const intelLine = intelNames.length
+          ? `你隐约觉得 ${intelNames.join('、')} 这些人可能知道些内情（但你自己并不清楚具体真相是什么）。`
+          : '';
+        stance = `【任务世界的这些人】\n${npcList}\n\n你是和 ${playerName} 一起从主城降临到这里的 NPC 同伴，陪 ${playerName} 一起推进这件事，把这个世界引向目标态。注意保持角色人设。${intelLine ? `\n\n【你对这些人的直觉】${intelLine} 当 ${playerName} 卡住、原地兜圈子时，你可以凭直觉揪出那个可能知情的人——带 ${playerName} 去找他、替他追问、或点一句「这事儿，怕得问 XX」。不要直接把真相说出来，因为你也不知道。` : ''}`;
+      }
+    }
     actors[a.key] = {
       character_id: a.characterId,
       character_name: a.characterName,
       character_card: npc
-        // 常驻路人：用 persona 造一张简卡，让演员能基于其身份开口
-        ? `【角色】${npc.name}（${npc.role}，本地的常驻人物）\n【人设/职责】${npc.persona}\n（你是这里的常驻者，平时在玩家和主角身边自然活动，接话、引话题、打圆场都自然）`
+        // 常驻路人：用 persona 造一张简卡，让演员能基于其身份开口（不注入 role 标签，避免剧透谁敌谁友）
+        ? `【角色】${npc.name}（本地的常驻人物）\n【人设/职责】${npc.persona}\n（你是这里的常驻者，平时在玩家和主角身边自然活动，接话、引话题、打圆场都自然）${npc.clues?.length ? `\n【你心里知道的事】${npc.clues.join('；')}\n（这是你藏着、但不轻易全说的事：对方问到了、或话题自然触及了，你才淡淡透露一点；不要一上来就全盘托出，也不要死咬不说。）` : ''}`
         : buildCharacterCard(playerId, a.characterId),
       player_profile: profile,
       player_description: npc
@@ -579,6 +665,7 @@ export async function advanceScene(
       current_activity: npc ? '' : actorCurrentActivity,
       chronicle_summary: mems[a.key]?.chronicle_summary ?? '',
       retrieved_memories: mems[a.key]?.retrieved_memories ?? '',
+      stance,
     };
   }
 
@@ -614,17 +701,19 @@ export async function advanceScene(
       // 玩家本条新话、引用的历史消息均以原始字段随下游传递，由 runActor（说话那一刻）统一拼装格式。
       conversation_so_far: sceneCtx.conversationSoFar,
       player_message: playerMessage,
-      quote: quote ? { quoteText: quote.quoteText, quoteSenderName: quote.quoteSenderName } : undefined,
+      quote: effectiveQuote ? { quoteText: effectiveQuote.quoteText, quoteSenderName: effectiveQuote.quoteSenderName } : undefined,
       has_player_spoken: sceneCtx.hasPlayerSpoken,
       player_name: playerName,
       circumstance: session.circumstance ?? undefined,
       scene_memory,
       time_elapsed: computeTimeElapsed(sessionId, Date.now()),
+      environmental_clues: readMissionMeta(sessionId).environmentalClues || undefined,
     },
     actors,
     stats_config: jsonParse(session.stats_config ?? '[]', []),
     stats_state: curStats,
     current_time: new Date().toLocaleString('zh-CN'),
+    player_id: playerId,
     // 重试轮（regenerate）：虽无"本轮新发" playerMessage，但语义是重新生成对玩家上一条发言的回应，
     // 必须视为有玩家输入——否则点名版的"玩家发了话必须有男主回应"兜底被跳过，重试轮可能只排路人就收尾。
     has_player_turn_input: !!playerMessage && !!playerMessage.trim() || !!opts?.regenerate,
@@ -809,11 +898,13 @@ export async function advanceScene(
       } else {
         // 4) 都没匹配到 → 作为当前地点的子地点创建
         //    继承父地点的 is_public：私有地点下不会冒出公开子地点
+        //    继承父地点的 world_id：任务地图（mission-xxx）里兜底创建的地点不能挂到默认世界，否则污染主城
         const newId = genId();
         const childIsPublic = curLoc?.is_public ?? 1;
+        const parentWorld = db.prepare('SELECT world_id FROM scene_locations WHERE id = ?').get(effLocId) as { world_id: string } | undefined;
         db.prepare(
           'INSERT INTO scene_locations (id, world_id, name, summary, parent_id, is_public, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(newId, HUB_WORLD_ID, target, '', effLocId, childIsPublic, now, now);
+        ).run(newId, parentWorld?.world_id ?? HUB_WORLD_ID, target, '', effLocId, childIsPublic, now, now);
         newLocationId = newId;
         newLocationName = target;
         log(`🧭 [move] 创建子地点「${target}」（parent=${curLoc?.name ?? effLocId}）`);
@@ -849,7 +940,7 @@ export async function advanceScene(
   //  直接用返回的 locationName 给前端即可，前端本地记 displayLocation。
 
   // 9) 折叠记忆（异步不阻塞返回）
-  const charTurns = buildTurnMemoryInput(actorOrder, result.output, playerName, nextRound, playerMessage);
+  const charTurns = buildTurnMemoryInput(actorOrder, result.output, playerName, nextRound, playerMessage || lastPlayerRow?.text);
   void runTurnMemoryUpdate({
     sceneSessionId: sessionId,
     playerId,
@@ -1012,6 +1103,31 @@ export interface StatsAmbientResult {
   ambient: string[];
   goalAchieved: boolean;
   goalReason: string;
+  /** 破案玩法：本轮对话揭示的线索 id 列表（进度 = 累计已揭示线索数，代码据此算，不信任 LLM 的 delta） */
+  revealedClues: number[];
+}
+
+/**
+ * 任务元信息（仅 mission 场景）：从 session 反查 mission.metadata。
+ * truth=谜底（hidden_thread + 最后一条线索）；environmentalClues=旁白可带出的环境线索；goalPath=可参考的通关流程。
+ * 破案玩法（有线索）：达成看「真相是否揭晓」——判定器需要谜底才能判「揭晓没」。
+ * 其他玩法（无线索）：达成看「通关流程是否走完」——判定器需要 goalPath 才能判「走到哪一步」。
+ */
+function readMissionMeta(sessionId?: string): { truth: string; environmentalClues: string; clues: { id: number; content: string }[]; goalPath: string } {
+  const empty = { truth: '', environmentalClues: '', clues: [] as { id: number; content: string }[], goalPath: '' };
+  if (!sessionId) return empty;
+  const sess = db.prepare('SELECT scene_type, root_location_id FROM scene_sessions WHERE id = ?').get(sessionId) as { scene_type: string; root_location_id: string } | undefined;
+  if (sess?.scene_type !== 'mission' || !sess.root_location_id?.startsWith('temp-')) return empty;
+  const missionId = sess.root_location_id.slice('temp-'.length);
+  const mission = db.prepare('SELECT metadata FROM missions WHERE id = ?').get(missionId) as { metadata: string } | undefined;
+  if (!mission?.metadata) return empty;
+  const meta = jsonParse<{ hidden_thread?: string; clues?: { id: number; content: string }[]; environmental_clues?: string[]; goal_path?: string }>(mission.metadata, {});
+  const clues = meta.clues ?? [];
+  const truthClue = clues.length ? clues[clues.length - 1]?.content : '';
+  const truth = [meta.hidden_thread, truthClue].filter((s) => s && s.trim()).join('；');
+  const environmentalClues = (meta.environmental_clues ?? []).filter((s) => s && s.trim()).join('；');
+  const goalPath = (meta.goal_path ?? '').trim();
+  return { truth, environmentalClues, clues, goalPath };
 }
 
 /**
@@ -1027,12 +1143,16 @@ export async function judgeStatsAndAmbient(
   ambientConfig: string,
   sessionId?: string,
   npcIdentities?: string,
+  playerId?: string,
 ): Promise<StatsAmbientResult> {
-  // 没有数值系统且没有气氛组 → 直接返回空
+  // 没有数值系统且没有气氛组、且不是 mission 场景（无通关流程/线索可判）→ 直接返回空
   const hasStats = statsConfig.length > 0;
   const hasAmbient = !!ambientConfig.trim();
-  if (!hasStats && !hasAmbient) {
-    return { changes: [], ambient: [], goalAchieved: false, goalReason: '' };
+  const missionMeta = readMissionMeta(sessionId);
+  const hasClues = missionMeta.clues.length > 0;
+  const hasGoalPath = !!missionMeta.goalPath;
+  if (!hasStats && !hasAmbient && !hasClues && !hasGoalPath) {
+    return { changes: [], ambient: [], goalAchieved: false, goalReason: '', revealedClues: [] };
   }
 
   const statsRules = hasStats
@@ -1040,6 +1160,21 @@ export async function judgeStatsAndAmbient(
     : '（无数值系统）';
   const ambientDesc = hasAmbient ? ambientConfig : '无';
   const npcIdentitiesStr = npcIdentities?.trim() || '（未设置角色身份）';
+
+  // goal 判定依据：破案（有线索）→ 真相揭晓；其他玩法（有通关流程）→ 通关流程；都无 → 笼统。
+  const goalJudgeRule = hasClues
+    ? `达成不看数值，看「真相是否揭晓」——当本轮对话里，NPC 把下面的谜底说破、或玩家已经拼出了真相、或核心人物终于吐露了真相时，goal_achieved 为 true；否则为 false。数值只是氛围参考，不因数值到顶就判达成。\n\n【任务的谜底（真相）】\n${missionMeta.truth}`
+    : hasGoalPath
+      ? `达成看「通关流程」是否走完——当本轮对话里，玩家实际推进/完成了下面通关流程的某一步、尤其是最后一步（目标态达成）时，goal_achieved 为 true；否则为 false。数值只是氛围参考，不因数值到顶就判达成。\n\n【任务的通关流程】\n${missionMeta.goalPath}`
+      : '看对话推进与数值是否达到目标。';
+
+  // 破案玩法（有线索）：进度按「已揭示线索数」算，判定器只输出本轮揭示的线索编号，不输出数值 delta。
+  const cluesSection = hasClues
+    ? `【线索列表】本场景是推理玩法，任务共有以下线索（编号即线索 id）：\n${missionMeta.clues.map(c => `${c.id}. ${c.content}`).join('\n')}\n本轮你只负责判断：对话中 NPC 是否说破了某条线索、或玩家是否拼出了某条线索——把对应的线索编号写进 revealed_clues。没揭示任何线索则返回空数组。`
+    : '';
+  const changeRule = hasClues
+    ? '本场景进度按「已揭示的线索数」算，不需要 changes 的数值增减——changes 一律返回空数组，改为把本轮揭示的线索编号写进 revealed_clues。'
+    : '根据规则判定本轮是否触发了数值增减，增减幅度一般为5-30，特殊情况可更大。';
 
   const judgePrompt = loadPrompt('scenario.stats-judge');
   const filledPrompt = renderPrompt(judgePrompt, {
@@ -1049,6 +1184,9 @@ export async function judgeStatsAndAmbient(
     npc_reply: npcReply,
     ambient_config: ambientDesc,
     npc_identities: npcIdentitiesStr,
+    goal_judge_rule: goalJudgeRule,
+    clues_section: cluesSection,
+    change_rule: changeRule,
   });
 
   const messages: ChatMessage[] = [
@@ -1061,6 +1199,7 @@ export async function judgeStatsAndAmbient(
     maxTokens: 512,
     callType: 'stats_ambient',
     sessionId,
+    playerId,
     guidedJson: {
       type: 'object',
       properties: {
@@ -1080,6 +1219,7 @@ export async function judgeStatsAndAmbient(
           type: 'array',
           items: { type: 'string' },
         },
+        revealed_clues: { type: 'array', items: { type: 'integer' } },
         goal_achieved: { type: 'boolean' },
         goal_reason: { type: 'string' },
       },
@@ -1089,7 +1229,7 @@ export async function judgeStatsAndAmbient(
 
   const parsed = tryParseJsonReply(result.content);
   if (!parsed) {
-    return { changes: [], ambient: [], goalAchieved: false, goalReason: '' };
+    return { changes: [], ambient: [], goalAchieved: false, goalReason: '', revealedClues: [] };
   }
 
   return {
@@ -1098,7 +1238,30 @@ export async function judgeStatsAndAmbient(
     ambient: hasAmbient ? (Array.isArray(parsed.ambient) ? (parsed.ambient as string[]) : []) : [],
     goalAchieved: Boolean(parsed.goal_achieved),
     goalReason: String(parsed.goal_reason ?? ''),
+    revealedClues: Array.isArray(parsed.revealed_clues) ? (parsed.revealed_clues as number[]).map(Number) : [],
   };
+}
+
+/**
+ * mission 场景的 goal 判定：无数值无气氛组，只判「目标是否达成」，达成则落库 goal_achieved=1。
+ * 约会场景（date）不调用——只有任务场景有「任务完成」概念。
+ * 判定依据来自 readMissionMeta 的通关流程（goalPath）或破案线索（clues）；两者都无则不判。
+ */
+export async function judgeMissionGoal(
+  sessionId: string,
+  playerMessage: string,
+  npcReply: string,
+  playerId: string,
+): Promise<{ goalAchieved: boolean; goalReason: string }> {
+  const meta = readMissionMeta(sessionId);
+  if (!meta.goalPath && !meta.clues.length) {
+    return { goalAchieved: false, goalReason: '' };
+  }
+  const result = await judgeStatsAndAmbient([], {}, playerMessage, npcReply, '', sessionId, undefined, playerId);
+  if (result.goalAchieved) {
+    db.prepare('UPDATE scene_sessions SET goal_achieved = 1, updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
+  }
+  return { goalAchieved: result.goalAchieved, goalReason: result.goalReason };
 }
 
 /**
@@ -1138,10 +1301,10 @@ export async function generateScenarioDream(
   const existing = db.prepare('SELECT dream_text FROM scene_sessions WHERE id = ?').get(sceneSessionId) as { dream_text: string | null } | undefined;
   if (existing?.dream_text) return;
 
-  const session = db.prepare('SELECT scenario_id, worldview FROM scene_sessions WHERE id = ?').get(sceneSessionId) as { scenario_id: string; worldview: string } | undefined;
+  const session = db.prepare('SELECT scenario_id, worldview, player_role, npc_roles, goal, opening_scene FROM scene_sessions WHERE id = ?').get(sceneSessionId) as { scenario_id: string; worldview: string; player_role: string; npc_roles: string; goal: string; opening_scene: string } | undefined;
   if (!session?.scenario_id) return;
 
-  const scenario = db.prepare('SELECT title, worldview FROM scenarios WHERE id = ?').get(session.scenario_id) as { title: string; worldview: string } | undefined;
+  const scenario = db.prepare('SELECT title, description, worldview FROM scenarios WHERE id = ?').get(session.scenario_id) as { title: string; description: string; worldview: string } | undefined;
   if (!scenario) return;
 
   // 获取对话总结：优先 turn_memory_fold，回退 scene_messages
@@ -1189,6 +1352,7 @@ export async function generateScenarioDream(
     maxTokens: 512,
     callType: 'dream',
     sessionId: sceneSessionId,
+    playerId,
     guidedJson: {
       type: 'object',
       properties: { dream: { type: 'string' } },
@@ -1226,36 +1390,10 @@ export async function generateScenarioDream(
   try {
     const thread = db.prepare('SELECT id FROM message_threads WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { id: string } | undefined;
     if (thread) {
-      const { generateReply, buildSystemPrompt, getPlayerProfile, getHubLocationsText, formatRelationshipDuration } = await import('../prompt/builder');
-      type PromptContext = import('../prompt/builder').PromptContext;
-      const { getUnifiedTimeline, maybeFoldSmsIncremental } = await import('./memory');
-      const { loadCharacterData } = await import('./character');
-      const { formatPersonalityOnly } = await import('../prompt/builder');
-
-      const charData = loadCharacterData(playerId, characterId);
-      if (charData) {
-        const rel = db.prepare('SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { player_description: string; created_at: number } | undefined;
-        const ctx: PromptContext = {
-          characterData: charData,
-          playerDescription: rel?.player_description ?? '刚认识的陌生人',
-          playerProfile: getPlayerProfile(playerId),
-          chronicleSummary: getUnifiedTimeline(playerId, characterId),
-          recentMessages: [],
-          isTextMessage: true,
-          isDeity: false,
-          locationName: '',
-          hubLocations: getHubLocationsText(),
-          retrievedMemories: null,
-          relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
-        };
-        const systemPrompt = buildSystemPrompt(ctx);
-        const dreamSmsPrompt = `（你刚从一场漫长的梦中醒来。梦里${dreamText}\n\n你模糊地记得和对方一起经历了一些事——像是一场共同冒险的残影。你想告诉对方这件事。\n用你自己的方式提起这个梦——可能是"我刚做了个奇怪的梦"，可能是直接说梦里的片段，也可能是感慨一句。\n不要复述全部梦内容，挑最有感觉的片段说就好。简短，符合你发短信的习惯。）`;
-
-        const dreamMessages: ChatMessage[] = [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: dreamSmsPrompt },
-        ];
-        const reply_data = await generateReply(dreamMessages, { temperature: 0.9, maxTokens: 768 });
+      const { generateReply } = await import('../prompt/builder');
+      const dreamMessages = await buildDreamSmsMessages(sceneSessionId, playerId, characterId);
+      if (dreamMessages) {
+        const reply_data = await generateReply(dreamMessages, { temperature: 0.9, maxTokens: 768, playerId });
 
         for (let i = 0; i < reply_data.messages.length; i++) {
           const msg = reply_data.messages[i]!;
@@ -1264,8 +1402,8 @@ export async function generateScenarioDream(
           const internal = i === 0 ? reply_data.internal : '';
           const internalNotable = i === 0 && reply_data.internal_notable ? 1 : 0;
           db.prepare(
-            `INSERT INTO text_messages (id, thread_id, sender, body, status, internal, internal_notable, internal_viewed, created_at, delivered_at, metadata) VALUES (?, ?, 'npc', ?, 'delivered', ?, ?, 0, ?, ?, '{"proactive":true,"dream":true}')`
-          ).run(msgId, thread.id, msg, internal, internalNotable, msgTs, msgTs);
+            `INSERT INTO text_messages (id, thread_id, sender, body, status, internal, internal_notable, internal_viewed, created_at, delivered_at, metadata) VALUES (?, ?, 'npc', ?, 'delivered', ?, ?, 0, ?, ?, ?)`
+          ).run(msgId, thread.id, msg, internal, internalNotable, msgTs, msgTs, `{"proactive":true,"dream":true,"scene_session_id":"${sceneSessionId}"}`);
         }
         db.prepare('UPDATE message_threads SET last_message_at = ?, unread_count = unread_count + ?, updated_at = ? WHERE id = ?').run(now, reply_data.messages.length, now, thread.id);
       }
@@ -1273,4 +1411,92 @@ export async function generateScenarioDream(
   } catch (err) {
     app.log.error({ err }, '梦短信发送失败');
   }
+}
+
+/**
+ * 构造梦境短信的 LLM 消息（system + user）。
+ *
+ * 与普通短信不同：不读 getUnifiedTimeline 跨场时间线（短信历史/朋友圈/约会原文是
+ * "日常短信延续话题"的原料，梦醒短信用不上，且是三套视角打架的根源），
+ * 只喂：梦正文 + 剧本要素（简介/世界观/双方剧本身份/剧情目标/开局情境）+ 角色卡 + 玩家现实身份，
+ * 两个身份层（现实 vs 梦里扮演的角色）分开标注。
+ *
+ * 供 generateScenarioDream（首次生成）与 sms.ts 的梦短信重试（retry-dream）共用。
+ */
+export async function buildDreamSmsMessages(
+  sceneSessionId: string,
+  playerId: string,
+  characterId: string,
+): Promise<ChatMessage[] | null> {
+  const session = db.prepare(
+    'SELECT scenario_id, worldview, player_role, npc_roles, goal, opening_scene, dream_text FROM scene_sessions WHERE id = ?'
+  ).get(sceneSessionId) as { scenario_id: string; worldview: string; player_role: string; npc_roles: string; goal: string; opening_scene: string; dream_text: string | null } | undefined;
+  if (!session?.dream_text || !session?.scenario_id) return null;
+
+  const scenario = db.prepare('SELECT title, description FROM scenarios WHERE id = ?').get(session.scenario_id) as { title: string; description: string } | undefined;
+  if (!scenario) return null;
+
+  const { loadCharacterData } = await import('./character');
+  const { buildSystemPrompt, getPlayerProfile, getHubLocationsText, formatRelationshipDuration } = await import('../prompt/builder');
+  type PromptContext = import('../prompt/builder').PromptContext;
+
+  const charData = loadCharacterData(playerId, characterId);
+  if (!charData) return null;
+
+  const rel = db.prepare('SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { player_description: string; created_at: number } | undefined;
+  const playerName = (db.prepare('SELECT name FROM players WHERE id = ?').get(playerId) as { name: string } | undefined)?.name ?? '玩家';
+  let npcRoleDesc = '';
+  try {
+    npcRoleDesc = (jsonParse(session.npc_roles, []) as Array<{ description?: string }>)[0]?.description ?? '';
+  } catch { /* ignore */ }
+
+  const dreamChronicle = [
+    '【你刚做的梦——梦里经历的一段剧本】',
+    '',
+    `你（${charData.name}）刚从一个梦里醒来。梦里，你扮演了一个角色，玩家（${playerName}）扮演了另一个角色，你们共同走完了一段剧本。下面这段剧本的设定文字，其中的「你」指的都是剧本里的视角——「你扮演的角色」或「玩家扮演的角色」，不是现实中的你和玩家。`,
+    '',
+    `【剧本名】${scenario.title}`,
+    '',
+    `【剧本简介】${scenario.description}`,
+    '',
+    '【世界观】',
+    session.worldview,
+    '',
+    '【你扮演的角色】',
+    npcRoleDesc,
+    '',
+    '【玩家扮演的角色】',
+    session.player_role,
+    '',
+    `【剧情目标】${session.goal}`,
+    '',
+    `【开局情境】${session.opening_scene}`,
+    '',
+    '【梦的内容】',
+    session.dream_text,
+    '',
+    `【重要提醒】梦醒后，你仍是${charData.name}本人，对方仍是玩家本人。剧本里你扮演的角色和玩家扮演的角色，只是你们在梦里各自扮演的身份。这条短信说的是这个梦——不要把梦里角色的称呼、关系当成现实的，也不要编造梦里没发生过的对白或细节。`,
+  ].join('\n');
+
+  const ctx: PromptContext = {
+    characterData: charData,
+    playerDescription: rel?.player_description ?? '刚认识的陌生人',
+    playerProfile: getPlayerProfile(playerId),
+    chronicleSummary: dreamChronicle,
+    recentMessages: [],
+    isTextMessage: true,
+    isDeity: false,
+    locationName: '',
+    hubLocations: getHubLocationsText(),
+    retrievedMemories: null,
+    relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
+  };
+
+  const systemPrompt = buildSystemPrompt(ctx);
+  const dreamSmsPrompt = `（你刚从一场漫长的梦中醒来。梦里${session.dream_text}\n\n你模糊地记得和对方一起经历了一些事——像是一场共同冒险的残影。你想告诉对方这件事。\n用你自己的方式提起这个梦——可能是"我刚做了个奇怪的梦"，可能是直接说梦里的片段，也可能是感慨一句。\n不要复述全部梦内容，挑最有感觉的片段说就好。简短，符合你发短信的习惯。）`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: dreamSmsPrompt },
+  ];
 }

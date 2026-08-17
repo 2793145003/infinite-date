@@ -75,7 +75,7 @@ migration('chronicles_msg_range', () => {
 // migration: chronicles 加 source/summary_type 列（区分来源和摘要类型）
 migration('chronicles_source', () => {
   db.exec("ALTER TABLE chronicles ADD COLUMN source TEXT NOT NULL DEFAULT 'conversation'");
-  db.exec('ALTER TABLE chronicles ADD COLUMN summary_type TEXT');
+  db.exec("ALTER TABLE chronicles ADD COLUMN summary_type TEXT NOT NULL DEFAULT 'segment'");
 });
 
 // migration: relationships 加 created_at 列（记录初次相遇时间）
@@ -174,6 +174,51 @@ migration('scene_sessions_scenario_fields', () => {
   db.exec("ALTER TABLE scene_sessions ADD COLUMN ambient_config TEXT NOT NULL DEFAULT ''");
   db.exec("ALTER TABLE scene_sessions ADD COLUMN goal_achieved INTEGER NOT NULL DEFAULT 0");
 });
+
+// migration: scene_sessions 加 revealed_clues 列（破案玩法已揭示的线索 id，JSON 数组）
+migration('scene_sessions_revealed_clues', () => db.exec("ALTER TABLE scene_sessions ADD COLUMN revealed_clues TEXT NOT NULL DEFAULT '[]'"));
+
+// migration: turn_player_facts.scene_session_id 改为允许 NULL + 补 FK
+// 背景：旧表（生产库）scene_session_id 是 NOT NULL 且无 FK，而 scene-schema.ts 的新建表 SQL 是
+//   TEXT REFERENCES scene_sessions(id) ON DELETE CASCADE（允许 NULL）。手动添加的事实（POST /facts）
+//   没有场景来源，scene_session_id 应为 NULL；空串/孤儿 UUID 会违反外键，这里一并转 NULL。
+migration('turn_player_facts_scene_session_nullable', () => {
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    db.exec('BEGIN');
+    db.exec('DROP TABLE IF EXISTS turn_player_facts_new;');
+    db.exec(`
+      CREATE TABLE turn_player_facts_new (
+        id               TEXT PRIMARY KEY,
+        player_id        TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        character_id     TEXT NOT NULL,
+        scene_session_id TEXT REFERENCES scene_sessions(id) ON DELETE CASCADE,
+        round_no         INTEGER NOT NULL,
+        fact             TEXT NOT NULL,
+        created_at       INTEGER NOT NULL
+      );
+    `);
+    db.exec(`
+      INSERT INTO turn_player_facts_new (id, player_id, character_id, scene_session_id, round_no, fact, created_at)
+      SELECT id, player_id, character_id,
+        CASE WHEN scene_session_id IN (SELECT id FROM scene_sessions) THEN scene_session_id ELSE NULL END,
+        round_no, fact, created_at
+      FROM turn_player_facts;
+    `);
+    db.exec('DROP TABLE turn_player_facts;');
+    db.exec('ALTER TABLE turn_player_facts_new RENAME TO turn_player_facts;');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_turn_pf ON turn_player_facts (player_id, character_id, scene_session_id, round_no);');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+});
+
+// migration: emails 加 character_id 列（男主来信关联发件角色）
+migration('emails_character_id', () => db.exec('ALTER TABLE emails ADD COLUMN character_id TEXT'));
 
 // 写入默认设置
 const insertSetting = db.prepare(

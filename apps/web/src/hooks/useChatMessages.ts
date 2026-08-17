@@ -37,8 +37,6 @@ export interface NpcReplyLike {
 export interface NpcResponseLike {
   npcMessages: NpcReplyLike[];
   scene_concluded?: boolean;
-  environment?: string;
-  quest_npc_line?: string;
   stats?: { stats: Record<string, number>; goal_achieved?: boolean } | null;
 }
 
@@ -178,19 +176,6 @@ export function useChatMessages<M extends ChatMessage = ChatMessage>(
     }).catch(() => {});
   }, []);
 
-  /** 添加旁白消息（任务模式环境描述、任务对象台词等） */
-  const appendNarration = useCallback((text: string, role = 'narration') => {
-    setMessages(prev => [...prev, {
-      id: `${role}-${Date.now()}`,
-      role,
-      text,
-      internal: '',
-      internal_notable: false,
-      internal_viewed: false,
-      created_at: Date.now(),
-    } as unknown as M]);
-  }, []);
-
   const handleSend = useCallback(async () => {
     if ((!input.trim() && !pendingImage) || sending) return;
     const text = input.trim();
@@ -222,17 +207,6 @@ export function useChatMessages<M extends ChatMessage = ChatMessage>(
       // 更新临时消息 ID
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: data.playerMessage.id } : m));
 
-      // 任务模式：先显示环境旁白
-      if (data.environment) {
-        appendNarration(data.environment, 'narration');
-        await sleep(600);
-      }
-      // 任务模式：显示任务对象台词
-      if (data.quest_npc_line) {
-        appendNarration(data.quest_npc_line, 'quest_npc');
-        await sleep(500);
-      }
-
       await revealNpcMessages(
         data.npcMessages,
         (msgs) => setMessages(prev => [...prev, ...msgs]),
@@ -251,7 +225,7 @@ export function useChatMessages<M extends ChatMessage = ChatMessage>(
     } finally {
       setSending(false);
     }
-  }, [input, pendingImage, sending, playerRole, sendMessage, revealNpcMessages, appendNarration, onSceneConcluded, onSendResponse]);
+  }, [input, pendingImage, sending, playerRole, sendMessage, revealNpcMessages, onSceneConcluded, onSendResponse]);
 
   const handleUndo = useCallback(async () => {
     if (undoing || !undo) return;
@@ -285,16 +259,6 @@ export function useChatMessages<M extends ChatMessage = ChatMessage>(
         setMessages([]);
       }
       const data = await retry();
-      // 任务模式：先显示环境旁白（如果有）
-      if (data.environment) {
-        appendNarration(data.environment, 'narration');
-        await sleep(600);
-      }
-      // 任务模式：显示任务对象台词（如果有）
-      if (data.quest_npc_line) {
-        appendNarration(data.quest_npc_line, 'quest_npc');
-        await sleep(500);
-      }
       await revealNpcMessages(
         data.npcMessages,
         (msgs) => setMessages(prev => [...prev, ...msgs]),
@@ -311,7 +275,7 @@ export function useChatMessages<M extends ChatMessage = ChatMessage>(
     } finally {
       setRetrying(false);
     }
-  }, [retrying, retry, messages, playerRole, revealNpcMessages, appendNarration, onSendResponse]);
+  }, [retrying, retry, messages, playerRole, revealNpcMessages, onSendResponse]);
 
   const handleNudge = useCallback(async () => {
     if (nudging || !nudge) return;
@@ -387,7 +351,6 @@ export function useChatMessages<M extends ChatMessage = ChatMessage>(
     reload,
     insertBrackets,
     handleCopy,
-    appendNarration,
     revealNpcMessages,
     revealProactive,
     handleSend,

@@ -43,6 +43,63 @@ interface StatsConfigItem {
   target?: number | null;
 }
 
+/**
+ * 应用一轮的数值/进度变动，落库 + 推「数值变动」旁白拍。
+ * 破案玩法（mission + 有进度）：进度 = 累计已揭示线索数，天然封顶，不信任 LLM delta。
+ * 其他玩法：按 LLM delta，clamp 到 [0, target] 防超（治「进度 120 > 100」类问题）。
+ */
+function applyStatsChanges(
+  sessionId: string,
+  sceneType: string,
+  statsConfig: StatsConfigItem[],
+  statsBefore: Record<string, number>,
+  revealedBefore: number[],
+  judgeResult: { changes: Array<{ name: string; delta: number; reason: string }>; revealedClues?: number[] },
+  roundNo: number,
+  send: (data: unknown) => void,
+): { newStatsState: Record<string, number>; statsChangesOverall: Array<{ name: string; before: number; after: number }> } {
+  const newStatsState = { ...statsBefore };
+  const statsChangesOverall: Array<{ name: string; before: number; after: number }> = [];
+
+  const isClueProgress = sceneType === 'mission' && statsConfig.length > 0;
+  if (isClueProgress) {
+    // 破案：进度 = 累计已揭示线索数（target 已 = 线索总数，天然封顶）
+    const revealedSet = new Set<number>(revealedBefore);
+    for (const cid of (judgeResult.revealedClues ?? [])) revealedSet.add(cid);
+    const revealedNow = [...revealedSet].sort((a, b) => a - b);
+    const statName = statsConfig[0]!.name;
+    const before = newStatsState[statName] ?? 0;
+    newStatsState[statName] = revealedNow.length;
+    db.prepare('UPDATE scene_sessions SET stats_state = ?, revealed_clues = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(newStatsState), JSON.stringify(revealedNow), Date.now(), sessionId);
+    if (revealedNow.length !== before) {
+      statsChangesOverall.push({ name: statName, before, after: revealedNow.length });
+    }
+  } else if (judgeResult.changes.length > 0) {
+    for (const ch of judgeResult.changes) {
+      const cfg = statsConfig.find(s => s.name === ch.name);
+      const before = newStatsState[ch.name] ?? 0;
+      let after = before + ch.delta;
+      if (cfg?.target != null && cfg.target > 0) after = Math.max(0, Math.min(after, cfg.target));
+      newStatsState[ch.name] = after;
+      statsChangesOverall.push({ name: ch.name, before, after });
+    }
+    db.prepare('UPDATE scene_sessions SET stats_state = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(newStatsState), Date.now(), sessionId);
+
+    // 数值变动旁白：脚本直接生成，不带原因，存库 + 推前端
+    const changeText = judgeResult.changes
+      .map(c => `${c.name}${c.delta > 0 ? '↑' : '↓'}${Math.abs(c.delta)}`)
+      .join('  ');
+    db.prepare(
+      `INSERT INTO scene_messages (id, scene_session_id, round_no, role, character_id, character_name, text, stats_delta, quote, internal, internal_notable, created_at) VALUES (?, ?, ?, 'narration', NULL, '数值变动', ?, '{}', NULL, '', 0, ?)`
+    ).run(genId(), sessionId, roundNo, changeText, Date.now());
+    send({ type: 'beat', beat: { kind: 'narration', speaker: '数值变动', content: changeText } });
+  }
+
+  return { newStatsState, statsChangesOverall };
+}
+
 // ── 剧本字段定义（可 Roll 的字段）──────────────────────────────
 
 const SCENARIO_FIELDS = [
@@ -239,7 +296,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     ];
 
     try {
-      const result = await chat(messages, { temperature: 0.9, maxTokens: 512, guidedJson: FIELD_SCHEMAS[field] });
+      const result = await chat(messages, { temperature: 0.9, maxTokens: 512, guidedJson: FIELD_SCHEMAS[field], playerId });
       const parsed = tryParseJsonReply(result.content);
       if (!parsed || typeof parsed[field] !== 'string') return reply.code(502).send({ error: '生成失败，请重试' });
 
@@ -282,7 +339,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     ];
 
     try {
-      const result = await chat(messages, { temperature: 0.9, maxTokens: 768, guidedJson: NPC_ROLES_SCHEMA });
+      const result = await chat(messages, { temperature: 0.9, maxTokens: 768, guidedJson: NPC_ROLES_SCHEMA, playerId });
       const parsed = tryParseJsonReply(result.content);
       if (!parsed || !Array.isArray(parsed.npc_roles)) return reply.code(502).send({ error: '生成失败，请重试' });
 
@@ -342,7 +399,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     };
 
     try {
-      const result = await chat(messages, { temperature: 0.8, maxTokens: 768, guidedJson: statsSchema });
+      const result = await chat(messages, { temperature: 0.8, maxTokens: 768, guidedJson: statsSchema, playerId });
       const parsed = tryParseJsonReply(result.content);
       if (!parsed || !Array.isArray(parsed.stats)) return reply.code(502).send({ error: '生成失败，请重试' });
 
@@ -512,10 +569,11 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
       });
 
       // 2) 数值+气氛组判定（引擎完成后独立调用）
-      const session = db.prepare('SELECT stats_config, stats_state, ambient_config, character_ids, npc_roles FROM scene_sessions WHERE id = ?').get(sessionId) as any;
+      const session = db.prepare('SELECT stats_config, stats_state, ambient_config, character_ids, npc_roles, scene_type, revealed_clues FROM scene_sessions WHERE id = ?').get(sessionId) as any;
       const statsConfig = jsonParse<StatsConfigItem[]>(session?.stats_config ?? '[]', []);
       const statsBefore = jsonParse<Record<string, number>>(session?.stats_state ?? '{}', {});
       const ambientConfig = session?.ambient_config ?? '';
+      const revealedBefore = jsonParse<number[]>(session?.revealed_clues ?? '[]', []);
       const characterIds = jsonParse<string[]>(session?.character_ids ?? '[]', []);
       const npcIdentities = buildNpcIdentities(characterIds, session?.npc_roles ?? '[]');
 
@@ -527,31 +585,14 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
         .join('\n');
 
       const judgeResult = await judgeStatsAndAmbient(
-        statsConfig, statsBefore, playerMsg, npcReply, ambientConfig, sessionId, npcIdentities,
+        statsConfig, statsBefore, playerMsg, npcReply, ambientConfig, sessionId, npcIdentities, playerId,
       );
 
-      // 3) 应用数值变动
-      let newStatsState = { ...statsBefore };
-      const statsChangesOverall: { name: string; before: number; after: number }[] = [];
-      if (judgeResult.changes.length > 0) {
-        for (const ch of judgeResult.changes) {
-          const before = newStatsState[ch.name] ?? 0;
-          const after = before + ch.delta;
-          newStatsState[ch.name] = after;
-          statsChangesOverall.push({ name: ch.name, before, after });
-        }
-        db.prepare('UPDATE scene_sessions SET stats_state = ?, updated_at = ? WHERE id = ?')
-          .run(JSON.stringify(newStatsState), Date.now(), sessionId);
-
-        // 数值变动旁白：脚本直接生成，不带原因，存库 + 推前端
-        const changeText = judgeResult.changes
-          .map(c => `${c.name}${c.delta > 0 ? '↑' : '↓'}${Math.abs(c.delta)}`)
-          .join('  ');
-        db.prepare(
-          `INSERT INTO scene_messages (id, scene_session_id, round_no, role, character_id, character_name, text, stats_delta, quote, internal, internal_notable, created_at) VALUES (?, ?, ?, 'narration', NULL, '数值变动', ?, '{}', NULL, '', 0, ?)`
-        ).run(genId(), sessionId, result.roundNo, changeText, Date.now());
-        send({ type: 'beat', beat: { kind: 'narration', speaker: '数值变动', content: changeText } });
-      }
+      // 3) 应用数值变动（破案=线索数，其他=delta+clamp）
+      const { newStatsState, statsChangesOverall } = applyStatsChanges(
+        sessionId, session?.scene_type ?? '', statsConfig, statsBefore, revealedBefore,
+        judgeResult, result.roundNo, send,
+      );
 
       // 4) 存气氛组消息（进 conversation_so_far，NPC 下轮可见）
       if (judgeResult.ambient.length > 0) {
@@ -709,10 +750,11 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
 
       // 数值+气氛组判定（与 advance 路由一致）
       // 仅在有玩家消息时才做数值判定——无玩家消息的 retry 等同 continue，不应扣分
-      const session = db.prepare('SELECT stats_config, stats_state, ambient_config, character_ids, npc_roles FROM scene_sessions WHERE id = ?').get(sessionId) as any;
+      const session = db.prepare('SELECT stats_config, stats_state, ambient_config, character_ids, npc_roles, scene_type, revealed_clues FROM scene_sessions WHERE id = ?').get(sessionId) as any;
       const statsConfig = jsonParse<StatsConfigItem[]>(session?.stats_config ?? '[]', []);
       const statsBefore = jsonParse<Record<string, number>>(session?.stats_state ?? '{}', {});
       const ambientConfig = session?.ambient_config ?? '';
+      const revealedBefore = jsonParse<number[]>(session?.revealed_clues ?? '[]', []);
       const characterIds = jsonParse<string[]>(session?.character_ids ?? '[]', []);
       const npcIdentities = buildNpcIdentities(characterIds, session?.npc_roles ?? '[]');
 
@@ -723,7 +765,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
 
       let newStatsState = { ...statsBefore };
       const statsChangesOverall: { name: string; before: number; after: number }[] = [];
-      let judgeResult: { changes: any[]; ambient: string[]; goalAchieved: boolean; goalReason: string } = { changes: [], ambient: [], goalAchieved: false, goalReason: '' };
+      let judgeResult: { changes: any[]; ambient: string[]; goalAchieved: boolean; goalReason: string; revealedClues: number[] } = { changes: [], ambient: [], goalAchieved: false, goalReason: '', revealedClues: [] };
 
       if (playerMsg && playerMsg.trim()) {
         const npcReply = result.output
@@ -732,28 +774,15 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
           .join('\n');
 
         judgeResult = await judgeStatsAndAmbient(
-          statsConfig, statsBefore, playerMsg, npcReply, ambientConfig, sessionId, npcIdentities,
+          statsConfig, statsBefore, playerMsg, npcReply, ambientConfig, sessionId, npcIdentities, playerId,
         );
 
-        if (judgeResult.changes.length > 0) {
-          for (const ch of judgeResult.changes) {
-            const before = newStatsState[ch.name] ?? 0;
-            const after = before + ch.delta;
-            newStatsState[ch.name] = after;
-            statsChangesOverall.push({ name: ch.name, before, after });
-          }
-          db.prepare('UPDATE scene_sessions SET stats_state = ?, updated_at = ? WHERE id = ?')
-            .run(JSON.stringify(newStatsState), Date.now(), sessionId);
-
-          // 数值变动旁白：脚本直接生成，不带原因，存库 + 推前端
-          const changeText = judgeResult.changes
-            .map(c => `${c.name}${c.delta > 0 ? '↑' : '↓'}${Math.abs(c.delta)}`)
-            .join('  ');
-          db.prepare(
-            `INSERT INTO scene_messages (id, scene_session_id, round_no, role, character_id, character_name, text, stats_delta, quote, internal, internal_notable, created_at) VALUES (?, ?, ?, 'narration', NULL, '数值变动', ?, '{}', NULL, '', 0, ?)`
-          ).run(genId(), sessionId, result.roundNo, changeText, Date.now());
-          send({ type: 'beat', beat: { kind: 'narration', speaker: '数值变动', content: changeText } });
-        }
+        const applied = applyStatsChanges(
+          sessionId, session?.scene_type ?? '', statsConfig, statsBefore, revealedBefore,
+          judgeResult, result.roundNo, send,
+        );
+        newStatsState = applied.newStatsState;
+        statsChangesOverall.push(...applied.statsChangesOverall);
 
         if (judgeResult.ambient.length > 0) {
           storeAmbientMessages(sessionId, result.roundNo, judgeResult.ambient);
@@ -895,6 +924,48 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     const statsConfig = jsonParse<StatsConfigItem[]>(session.stats_config ?? '[]', []);
     const statsState = jsonParse<Record<string, number>>(session.stats_state ?? '{}', {});
 
+    // 任务场景：反查任务名 + 任务信息（供顶栏显示 + 点击查看）
+    // scene_session.root_location_id = `temp-${missionId}`
+    let missionTitle: string | null = null;
+    let missionInfo: {
+      briefing?: string;
+      worldTension?: string;
+      targetState?: string;
+      missionGoal?: string;
+      worldName?: string;
+      landmarks?: { name: string; feature: string }[];
+      coreNpcs?: { role: string; name: string; persona: string }[];
+    } | null = null;
+    if (session.scene_type === 'mission' && typeof session.root_location_id === 'string' && session.root_location_id.startsWith('temp-')) {
+      const missionId = session.root_location_id.slice('temp-'.length);
+      const mission = db.prepare('SELECT title, metadata FROM missions WHERE id = ?').get(missionId) as { title: string; metadata: string } | undefined;
+      if (mission) {
+        missionTitle = mission.title;
+        const meta = jsonParse<{
+          briefing?: string;
+          world_tension?: string;
+          target_state?: string;
+          mission_goal?: string;
+          landmarks?: { name: string; feature: string }[];
+          world_npcs?: { role: string; name: string; persona: string }[];
+        }>(mission.metadata, {});
+        missionInfo = {
+          briefing: meta.briefing ?? '',
+          worldTension: meta.world_tension ?? '',
+          targetState: meta.target_state ?? '',
+          missionGoal: meta.mission_goal ?? '',
+          landmarks: meta.landmarks ?? [],
+          coreNpcs: (meta.world_npcs ?? []).map((n) => ({ role: n.role, name: n.name, persona: n.persona })),
+        };
+        const worldName = (db.prepare('SELECT name FROM worlds WHERE id = (SELECT world_id FROM missions WHERE id = ?)').get(missionId) as { name: string } | undefined)?.name;
+        if (worldName) missionInfo.worldName = worldName;
+      }
+    }
+
+    // 同行者（男主）身份：session.npc_roles 是 JSON 数组 [{ identity, description }]
+    const npcRoles = jsonParse<Array<{ identity?: string; description?: string }>>(session.npc_roles ?? '[]', []);
+    const companionRole = npcRoles[0]?.description ?? '';
+
     return reply.send({
       sessionId: session.id,
       scenarioId: session.scenario_id,
@@ -910,9 +981,12 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
       dreamCustom: !!session.dream_custom,
       worldview: session.worldview ?? '',
       playerRole: session.player_role ?? '',
+      companionRole,
       goal: session.goal ?? '',
       ambientConfig: session.ambient_config ?? '',
       openingScene: session.opening_scene ?? '',
+      missionTitle: missionTitle ?? '',
+      missionInfo,
     });
   });
 }

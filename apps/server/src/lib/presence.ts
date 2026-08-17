@@ -8,7 +8,7 @@
  * 冷却：5min
  */
 import { db } from '../db';
-import { genId, now, jsonParse } from './util';
+import { genId, now } from './util';
 import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, type PromptContext } from '../prompt/builder';
 import { retrieveRelevantMemories, maybeFoldSmsIncremental, getUnifiedTimeline } from './memory';
 import { retrieveMemories } from './embedding';
@@ -183,26 +183,6 @@ export async function generateConversationProactive(
   const recentMsgs = db.prepare("SELECT role, text FROM messages WHERE session_id = ? AND role NOT IN ('narration', 'quest_npc') ORDER BY created_at DESC LIMIT 20").all(sessionId) as Array<{ role: string; text: string }>;
   // 注：约会proactive模式过滤narration/quest_npc，与正常发消息路由一致
 
-  // 任务世界设定注入（与 conversation.ts 的 message 路由保持一致）
-  let worldContext: string | undefined = undefined;
-  if (session.mission_id) {
-    const mission = db.prepare(`
-      SELECT m.metadata, w.name, w.summary, w.tone, w.rules, w.lore
-      FROM missions m JOIN worlds w ON m.world_id = w.id
-      WHERE m.id = ?
-    `).get(session.mission_id) as { metadata: string; name: string; summary: string; tone: string; rules: string; lore: string } | undefined;
-    if (mission) {
-      const meta = jsonParse<{ item: string; obsession: string; briefing: string }>(mission.metadata, { item: '', obsession: '', briefing: '' });
-      worldContext = `【任务世界】
-世界：${mission.name}
-环境：${mission.summary}
-氛围：${mission.tone}
-${mission.rules ? `规则：${mission.rules}\n` : ''}背景：${mission.lore}
-任务目标：回收"${meta.item}"
-执念背景：${meta.obsession}`;
-    }
-  }
-
   // 记忆检索（Phase 5）
   let retrievedMemories: string | null = null;
   if (!isDeity) {
@@ -229,7 +209,6 @@ ${mission.rules ? `规则：${mission.rules}\n` : ''}背景：${mission.lore}
     hubLocations: getHubLocationsText(),
     retrievedMemories,
     relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
-    worldContext,
   };
 
   const systemPrompt = buildSystemPrompt(ctx);
@@ -238,7 +217,7 @@ ${mission.rules ? `规则：${mission.rules}\n` : ''}背景：${mission.lore}
     : '（你之前主动搭了话，但对方一直没回应。你注意到了这份沉默——可能有点在意，可能觉得对方在发呆。再试一次，语气自然地追问或换个话题。简短，符合你的性格。不要表现出被忽视的不满，更像是随口一提。）';
   const messages: ChatMessage[] = buildMessages(systemPrompt, ctx.recentMessages, proactivePrompt);
 
-  let reply_data = await generateReply(messages, { temperature: 0.9, maxTokens: 768 });
+  let reply_data = await generateReply(messages, { temperature: 0.9, maxTokens: 768, playerId });
 
   // nudge时NPC请求搜索记忆：检索后重新生成
   if (reply_data.need_search && reply_data.search_query && !isDeity) {
@@ -248,7 +227,7 @@ ${mission.rules ? `规则：${mission.rules}\n` : ''}背景：${mission.lore}
       const enrichedCtx = { ...ctx, retrievedMemories: enrichedMemories };
       const enrichedSystemPrompt = buildSystemPrompt(enrichedCtx);
       const enrichedMessages = buildMessages(enrichedSystemPrompt, enrichedCtx.recentMessages, proactivePrompt);
-      const enrichedReply = await generateReply(enrichedMessages, { temperature: 0.9, maxTokens: 768 });
+      const enrichedReply = await generateReply(enrichedMessages, { temperature: 0.9, maxTokens: 768, playerId });
       reply_data = { ...enrichedReply, need_search: false, search_query: '' };
     }
   }

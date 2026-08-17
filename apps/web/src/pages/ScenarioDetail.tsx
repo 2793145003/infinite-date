@@ -38,7 +38,24 @@ export function ScenarioDetail({
         api.getActiveScenario(),
       ]);
       setScenario(scenarioData.scenario);
-      setActiveSession(activeData.session);
+      if (activeData.active) {
+        const charNames = activeData.characters ?? [];
+        setActiveSession({
+          scenarioSessionId: activeData.sessionId ?? '',
+          scenarioId: activeData.scenarioId ?? '',
+          scenarioTitle: activeData.title ?? '',
+          characterId: '',
+          characterName: charNames.join(' ＆ ') || '角色',
+          isGroup: charNames.length >= 2,
+          participants: charNames.length >= 2 ? charNames.map((name) => ({ name, characterId: '' })) : undefined,
+          statsState: {},
+          statsConfig: [],
+          goalAchieved: activeData.goalAchieved ?? false,
+          createdAt: 0,
+        });
+      } else {
+        setActiveSession(null);
+      }
     } catch {
       // ignore
     } finally {

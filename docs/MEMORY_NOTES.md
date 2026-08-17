@@ -6,6 +6,43 @@
 
 ---
 
+## 最新（2026-08-15：去病意象 + 困境贴合玩法约束 + 旺衰生克 + 动爻扣子人际层 + 战斗对手约束）
+
+- **去病意象**：任务生成去掉"病"这层——删 `illness` 字段（world-theme.ts 12 基调 + 接口 + 渲染行），"病症"统一改"困境"（三个 worldgen 模板 + evaluator + hexagram-prompt「本卦（世界困境）」+ divination 官鬼释义）。"痼疾"源头没了；旧任务需重摇才走新措辞。
+- **困境贴合玩法约束**：三个 worldgen 模板"要求"加"困境要能被玩法化解——困境的出口就是玩法"，防困境和玩法两张皮脱节（青瓦巷"枯脉痼疾"=古风 illness 困境 vs "战斗"玩法硬缝的产物）。
+- **旺衰生克**：补上一直空着的"旺衰"层——月建（12 节气近似定月，误差 ≤1 天）+ 日辰（本就已算）五行 vs 爻五行，定六亲旺衰（旺相休囚死口诀白话版），渲染成「力量对比（旺衰）」注入 najia 层：官鬼旺→对手势大、子孙旺→有解贵人得力，妻财/父母/兄弟同理白话。见 divination.ts `yueJianOfDay`/`wangShuaiOf`/`liuQinWangShuai` + hexagram-prompt.ts。
+- **动爻扣子人际层**：动爻渲染六亲白话化 + 点明「扣子落在关系上、别停物件」——gemma 接爻辞只接得住物件意象（"坏车轴"）接不住人际（"夫妻反目"），补后同一卦扣子从物件抬到人际（"陈年旧怨"）。见 hexagram-prompt.ts `renderHexagramLayer` 动爻段。
+- **战斗对手约束**：对手必需性由玩法定，不由卦象官鬼有无定——`renderGoalGuide` 对战斗显式要求「正在害人的对象必须作为 world_npcs 的对手 NPC 出现」，否则战斗没对手穿帮；其他玩法对手可有可无。
+- 涉及文件：`world-theme.ts`、`divination.ts`、`hexagram-prompt.ts`、`mission.ts`、`scene-wiring.ts`、三个 worldgen 模板 + evaluator；文档 HEXAGRAM_MISSION_DESIGN（五关键约束）、PROMPTS、DATA_MODEL。
+
+---
+
+## 最新（2026-08-15：任务场景 NPC 认知 + 官鬼释义软化）
+
+（完整设计见 `docs/HEXAGRAM_MISSION_DESIGN.md`「任务场景 NPC 认知」节）
+
+- **任务场景 NPC 认知**：演员 prompt 组装定稿——共用 `scene_rules`（玩家身份/男主身份+元认知/任务目标/开局情境）+ 逐人 `stance`（代码按角色类型分发，不写「若你是…」条件句）。
+- **男主注入任务 NPC 名单**：`【任务世界的这些人】`（name+persona，不含 role）+ 同伴立场。男主知道有这些人、什么来头，但六亲关系隐藏。
+- **任务 NPC 按 role 注入定位**（`roleStance`）：核心对象=被帮助的人/贵人=主动帮/靠山=关键帮/对手=不信任/竞争者=争同件事/所求之人=要找的人。角色视角，不用「贵人/对手」剧作词。
+- **官鬼释义软化**：`对手/压力/病症/阻碍`→`对手/压力/困境/不信任`（对手不预设使绊子，可仅「不信任这些外来者」；「病症」去病意象改「困境」，星落原话）。
+- **代词清洗**：accept 落库「你」→玩家昵称、「他」→男主名；scene-wiring 注入兜底 replace。
+- 文件：`lib/scene-wiring.ts`（roleStance + stance 逐人注入 + 男主名单）、`lib/run-scene-turn.ts`（stance 字段 + scene_rules 拼接）、`lib/divination.ts`（LIUQIN_CN 官鬼释义）、`routes/mission.ts`（accept 代词清洗）。
+
+---
+
+## 最新（2026-08-15：玩法 roll + 世界观基调 + 命名卡接入生产）
+
+（核心细节见 `docs/HEXAGRAM_MISSION_DESIGN.md`「世界观基调 + 玩法」节）
+
+- **玩法改确定性 roll**：`rollGoal`（战斗/寻物/破案/和解/守护五种），替代六亲推导玩法（六亲推导因固定日期旬空偏置、战斗 0 次被删）。
+- **玩法 guide 去具体例子**：`GOAL_GUIDES` 只留方向约束 + "写清什么"，不塞样板（例子收窄 LLM 输出）。
+- **威胁形态跟世界观基调走**：灵异出厉鬼、都市出人祸、西幻出魔力，不硬编码"人祸 vs 妖魔鬼怪"。
+- **数值降级为可选进度**：`stats` → `progress`（留空则纯玩法驱动，任务完成以玩法为准）。
+- **生产接入**：`mission.ts` generate 端点 roll `rollTheme`/`rollGoal`/`rollWorldCards` + 注入 `{{theme_guide}}`/`{{world_cards}}`/`{{goal_guide}}`；`mission.worldgen.txt` 升级 B 版；accept 端点 progress 替代 stats、mission_goal 进 goalText。
+- 文件：`lib/world-theme.ts`（rollTheme/rollGoal/GOAL_GUIDES）、`lib/name-pool.ts`（rollWorldCards）、`routes/mission.ts`。
+
+---
+
 ## 最新（2026-08-10：旧剧本归档 + 回忆页加场景剧本页签）
 
 ### 1. 回忆页新增场景剧本页签

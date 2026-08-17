@@ -1,0 +1,155 @@
+# NPC 任务（邀请任务）设计
+
+> 状态：**设计定稿（2026-08-16，星落拍板）**，尚未实现。
+> 配套：世界任务见 `HEXAGRAM_MISSION_DESIGN.md`；任务系统总纲见 `DESIGN.md` §2.4。
+
+---
+
+## 一、背景与动机
+
+1. **解决"玩家没话题"**：玩家和 NPC 互动内容枯竭时，由 NPC 主动摇卦生成一个小任务来邀请玩家，制造新的互动契机。
+2. **NPC 的"上班"**：NPC 主要靠做任务获取权限货币。权限经济由此闭环——NPC 独自完成赚得极少，和玩家一起完成赚得多，所以 NPC 盼着玩家来；玩家拒绝也不怨（不赚白不赚，赚少也是赚）。
+3. **世界观的善意面**：世界任务（困境→目标态）是系统"收税"的一面，NPC 任务是系统"做好事"的一面，两套并存世界观更立体。
+
+---
+
+## 二、核心定位（与世界任务对照）
+
+| 维度 | 世界任务（已实现） | NPC 任务（本设计） |
+|------|------------------|------------------|
+| 谁发起 | 玩家亲手摇卦（有"灵"） | **NPC 摇卦**（系统按 NPC 种子起卦，玩家不掷爻、看不到卦） |
+| 卦象含义 | 本卦=一个正在承受的生活困境 | 本卦=一件需要帮忙的小事 |
+| 调性 | 困境越重越好，有客观完成条件 | **温馨向，困难调低**，无困境无危险 |
+| 谁主角 | 玩家 + 同行 NPC 合作 | **NPC 是主角，玩家是帮手** |
+| 完成判断 | 客观（`goal_achieved` 数值判定 + 评级） | **不判断成败**，经历就行，玩家决定何时结束 |
+| 玩家拒绝 | 任务作废 | NPC 独自去做，回来发短信分享 |
+| 权限 | 双方（同行 NPC 也拿） | 双方；NPC 独自做拿极少 |
+
+**关键差异一句话**：世界任务是"摇卦→困境→玩家来解"，NPC 任务是"摇卦→小事→NPC 来请你一起做"。
+
+---
+
+## 三、触发
+
+**条件（全部满足才触发）：**
+
+1. NPC 是玩家好友；
+2. NPC 行程在**空档段**（闲下来——忙时主神不会派活）；
+3. 玩家**无进行中的现场**（约会/对话/任务，复用 `getActiveLiveSlot`），不打断玩家话题；
+4. 该 NPC **今天还没发过任务邀请**（每个 NPC 每天最多一次，即他的"班"一天上一次）。
+
+**判定通过后**：摇卦生成任务 → 落库 → 发短信邀请。
+
+**触发入口（已定）**：并入现有 `moment-scheduler` 的 5 分钟 tick（与 `checkScheduleChange` 同源），新增 `checkNpcTaskInvite(playerId)` 遍历好友，先做上面 4 条廉价判定（全是 DB 读 + 时间比对，无 LLM），判定通过才走摇卦生成（一次 LLM 调用，不放进高频路径）。
+
+---
+
+## 四、生成（温馨向摇卦）
+
+**复用摇卦管线**，只改"翻译方向"：
+
+- **起卦**：`divination.ts` 现有纳甲筮法，种子 = **NPC 的 `character_id` + 时间 + 序号**（确定性；玩家不掷爻，无 cast）。NPC 摇卦不占玩家"灵"。
+- **多样性**：`rollTheme`（世界观基调 12 类）/ `rollWorldCards`（命名卡）/ 玩法 roll 全部复用，保证任务不重复、NPC 名/地名/职业不收敛。
+- **温馨向翻译（已定：新建独立模板 `mission.worldgen-cozy.txt`，不动 `mission.worldgen.txt` 的世界任务困境语义）**：
+  - 本卦不再是"生活困境"，翻译成"一件需要帮忙的小事"——教孩子唱歌、办识字班、帮邻居找走丢的小猫、照看小孩一下午、说和两个闹别扭的邻居；
+  - **困难调低**：不生成沉重困境、对手、危险、生死；威胁形态（若玩法需要）转成轻量形态（"赶走捣乱的野狗"而非"驱逐妖魔"）；
+  - 玩法五种温馨化映射：战斗→赶走捣乱者/解决小冲突，寻物→找走丢的人或物，破案→小谜题/失物，和解→说和，守护→照看/陪伴。
+- **落库**：`missions` 表 `quest_type='npc'`、`assignee_type='npc'`、`assignee_id=邀请 NPC 的 character_id`、`status='available'`。任务世界仍是 `worlds` 表一条 `world_type='mission'` 记录（原创世界，一次性）。
+
+---
+
+## 五、邀请（短信）
+
+- 走短信通道（`text_messages`），NPC 按人设生成邀请语（"我接了个活儿，要不要一起？"）。
+- 复用短信约会邀请（`npc_invite`）的交互模式：短信里出「接受 / 拒绝」按钮，前端 `SmsApp` 增加"任务邀请"类型标记（与"约会邀请"区分）。
+- 邀请落库时记录该 NPC 的 `last_task_invite_day = 今天`（见 §九），当日不再邀请。
+
+---
+
+## 六、在线状态（短信收得到 / 收不到）
+
+> **在线状态只描述"短信能不能即时到"，跟"人在哪/行程"是两个维度。** 唯一例外是 `mission` 态——它同时意味着人不在主城（去了任务世界）。
+
+短信"收不收得到"由 NPC 的**三态**决定（轻量判定函数 `getNpcOnlineState`，返回 `online`/`sleep`/`mission`）：
+
+| 状态 | 判定 | 玩家发短信 | NPC 回复 |
+|------|------|-----------|---------|
+| `online` | 默认 | 正常 | 即时正常回复 |
+| `sleep` | 当前行程段在睡觉（作息：夜猫子白天睡、正常人晚上睡），且距该 NPC 最近一条回复 ≥ 醒窗口（或从未回过） | 正常 | 即时回复，但**演"被吵醒"**（迷糊/起床气/温柔，看人设） |
+| `mission` | 有进行中的 solo 任务（`quest_type='npc' AND status='solo' AND solo_complete_at > now`） | 照发、落库 | **不即时回**，回归后统一回（见 §八） |
+
+**醒窗口 = 15 分钟（星落拍板）**：睡觉段内被吵醒后，NPC"上线"一个窗口——窗口内玩家再回，NPC 正常回复（不重复"刚醒"，视作半醒）；距最近回复超 15 分钟没后续，NPC 继续睡，回到 `sleep`。
+
+**"被吵醒"实现**：短信生成时若判定 `sleep`，往回复 prompt 注入一句"你刚才在睡觉，被这条短信吵醒了"，LLM 按人设演。仅 `sleep` 状态触发；醒窗口内已是 `online`，不再注入（被吵醒语境天然只对入睡后第一条生效）。
+
+**实现原则（轻量）**：
+- 不加"已读回执"，不加在线状态机，**不新增字段**——`mission` 查 missions 表、`sleep` 查行程段 + `text_messages` 最近回复时间、醒窗口是一个常量。
+- 消费方：短信界面显示状态提示（"对方正在休息" / "对方正在任务世界，暂时无法回复"）+ 短信回复生成逻辑（`mission` 不生成、`sleep` 注入被吵醒）。
+- 睡觉 ≠ 从主城消失：`sleep` 态 NPC 仍在家（地图在场/行程照常），只是回复带被吵醒；只有 `mission` 才从主城消失。
+
+---
+
+## 七、分支 A：玩家接受
+
+复用世界任务 `POST /missions/:missionId/accept` 的链路（对 `quest_type='npc'` 放开）：
+
+1. 校验：好友 + 无进行中现场（`getActiveLiveSlot` 409 互斥）；
+2. `status → 'active'`，`started_at` 落库；
+3. 建任务地图 `temp-{missionId}`（世界 NPC 写入，任务结束删除）；
+4. `scene_sessions` 建 `scene_type='mission'` 会话，复用 scene 引擎推进（`advanceScene`）；
+5. 一起经历，**不判断成败**（无 `goal_achieved` 数值判定、无评级）；
+6. 玩家点结束 → `POST /missions/end` 收尾 → 权限到账（`grantPlayerPermission`，双方）。
+
+> 注意：世界任务 `accept` 里 `quest_type='world'` 的 WHERE 与"必选同行 NPC"校验要按 `quest_type` 分流——NPC 任务同行者就是邀请的 NPC 本人（`assignee_id`），无需玩家再选。
+
+---
+
+## 八、分支 B：玩家拒绝（NPC 独自完成）
+
+复用 `POST /missions/:missionId/decline`，但 `quest_type='npc'` 的语义**不是作废，而是改 solo**：
+
+1. `status → 'solo'`，**roll 完成时长**（按任务类型给区间，纯查表 + 区间随机，区间可再调）：教学 2-4h、寻物 1-3h、照看/守护 2-3h、说和/和解 1-2h、破案/小谜题 2-3h、赶走捣乱者/小冲突 1-2h。`solo_complete_at = now + 时长`；
+2. **期间 NPC 从主城消失 + 短信收不到**：所有查"NPC 在场/位置"的消费方加 `NOT EXISTS`（`missions.quest_type='npc' AND status='solo' AND solo_complete_at > now`）排除——与现有"约会中排除"同模式。涉及：地图在场（`/scene/map/npcs`）、行程（`getSceneSchedule`/`getCurrentSchedule`）、主动短信（`proactive.ts`）。短信收不到由在线状态 `mission` 态承担（见 §六）。
+3. **到点回归**：后台 tick 扫到 `solo_complete_at <= now` 的 `solo` 任务 → `status → 'completed'` → NPC 回主城，发一条短信："抱歉，之前在任务世界，回来晚了" + 分享做成了什么（LLM 按人设 + 任务内容生成，不带遗憾），顺带回应玩家在任务期间发来、未即时回的消息。
+4. 权限：NPC 独自完成拿**极少**（体现"跟玩家一起才赚得多"）。
+
+---
+
+## 九、数据模型变更
+
+**`missions` 表新增一列：**
+
+```sql
+ALTER TABLE missions ADD COLUMN solo_complete_at INTEGER;  -- 玩家拒绝后 roll 的独自完成时刻；接受分支为 NULL
+```
+
+状态流转（`status` 现有 `available`/`active`/`completed`，**新增 `solo`**）：
+
+```
+available ──玩家接受──▶ active ──玩家结束──▶ completed
+    └──────玩家拒绝──▶ solo ──到点──▶ completed
+```
+
+**`relationships` 表新增一列（"每天最多一次"）：**
+
+```sql
+ALTER TABLE relationships ADD COLUMN last_task_invite_day TEXT;  -- 北京日期 day_key，空=今天没发过
+```
+
+> 在线状态（§六）不新增字段：`mission` 读 missions 表、`sleep` 读行程段 + `text_messages`、醒窗口是常量。
+
+---
+
+## 十、权限发放
+
+- 玩家接受：`POST /missions/end` 收尾时 `grantPlayerPermission(playerId, reward, 'mission_reward')`，邀请的 NPC 也获合作收益（复用世界任务现有发放逻辑）。
+- 玩家拒绝：NPC 独自完成，到点时发极少权限（或仅记录不发放，实现时定数值口径）。
+
+---
+
+## 十一、已定决策（2026-08-16，全部对齐）
+
+1. **"收不到短信"行为**：做在线状态三态（§六），不做已读回执；任务中收不到、睡觉能吵醒、醒窗口 15 分钟。
+2. **温馨向 worldgen**：新建独立模板 `mission.worldgen-cozy.txt`，不污染世界任务的困境语义（§四）。
+3. **solo 完成时长**：按任务类型给区间表（§八第 1 点）。
+4. **触发 tick**：并入现有 `moment-scheduler` 的 5 分钟遍历（§三）。

@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS chronicles (
   summary               TEXT NOT NULL DEFAULT '',
   key_memories          TEXT NOT NULL DEFAULT '[]',
   source                TEXT NOT NULL DEFAULT 'conversation',
-  summary_type          TEXT,
+  summary_type          TEXT NOT NULL DEFAULT 'segment',
   created_at            INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chronicles ON chronicles(player_id, character_id, character_instance_id, created_at);

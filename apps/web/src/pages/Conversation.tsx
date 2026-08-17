@@ -39,8 +39,6 @@ export function Conversation({
   const [isFriend, setIsFriend] = useState(false);
   const [friendLoaded, setFriendLoaded] = useState(false);
   const [addingFriend, setAddingFriend] = useState(false);
-  const [missionInfo, setMissionInfo] = useState<{ worldName: string; item: string; briefing: string } | null>(null);
-  const [showMissionDetail, setShowMissionDetail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const greetingShownRef = useRef(false);
   // greeting 显示期间的 typing 指示器（greeting 发生在 hook 的 handleSend 生命周期之外）
@@ -65,7 +63,6 @@ export function Conversation({
     const data = await api.getConversationMessages(sessionId);
     setIsFriend(data.isFriend);
     setFriendLoaded(true);
-    setMissionInfo(data.missionInfo ?? null);
     const msgs = data.messages as Array<typeof data.messages[number] & { speaker?: string | null }>;
     return msgs.map(m => {
       const sp = m.speaker;
@@ -161,17 +158,8 @@ export function Conversation({
       // 单聊 greeting — greeting 在此分支非 GroupGreeting
       greetingShownRef.current = true;
       setGreetingTyping(true);
-      const g = greeting as { environment: string; messages: string[]; internal: string; internal_notable: boolean };
+      const g = greeting as { messages: string[]; internal: string; internal_notable: boolean };
       (async () => {
-        // 先显示环境旁白
-        if (g.environment) {
-          await sleep(600);
-          setMessages(prev => [...prev, {
-            id: `narration-${Date.now()}`, role: 'narration' as const, text: g.environment,
-            internal: '', internal_notable: false, internal_viewed: false, created_at: Date.now(),
-          }]);
-          await sleep(800);
-        }
         await revealNpcMessages(
           g.messages.map((text, i) => ({
             id: `greeting-${i}`, text,
@@ -185,7 +173,6 @@ export function Conversation({
       api.getConversationMessages(sessionId).then(data => {
         setIsFriend(data.isFriend);
         setFriendLoaded(true);
-        setMissionInfo(data.missionInfo ?? null);
       }).catch(() => {});
     } else if (!greeting?.messages?.length) {
       safeReload();
@@ -297,34 +284,6 @@ export function Conversation({
           {ending ? '…' : '结束'}
         </button>
       </div>
-
-      {/* 任务横幅 */}
-      {missionInfo && (
-        <div className="id-mission-banner" onClick={() => setShowMissionDetail(!showMissionDetail)}>
-          <span className="id-mission-banner-icon">🌍</span>
-          <div className="id-mission-banner-info">
-            <div className="id-mission-banner-world">{missionInfo.worldName}</div>
-            <div className="id-mission-banner-goal">回收：{missionInfo.item.length > 20 ? missionInfo.item.slice(0, 20) + '…' : missionInfo.item}</div>
-          </div>
-          <span className="id-mission-banner-toggle">{showMissionDetail ? '▲' : '▼'}</span>
-        </div>
-      )}
-      {missionInfo && showMissionDetail && (
-        <div className="id-mission-detail">
-          <div className="id-mission-detail-row">
-            <span className="id-mission-detail-label">世界</span>
-            <span>{missionInfo.worldName}</span>
-          </div>
-          <div className="id-mission-detail-row">
-            <span className="id-mission-detail-label">目标</span>
-            <span>{missionInfo.item}</span>
-          </div>
-          <div className="id-mission-detail-row">
-            <span className="id-mission-detail-label">简报</span>
-            <span>{missionInfo.briefing}</span>
-          </div>
-        </div>
-      )}
 
       <div className="id-chat-messages">
         {messages.length === 0 ? (

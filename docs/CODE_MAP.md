@@ -47,7 +47,7 @@ infinite-date-v2/
 
 | 文件 | 行数 | 职责 | 关键导出 |
 |---|---|---|---|
-| `run-scene-turn.ts` | 1198 | **场景引擎内核**（点名版）。逐拍点名→演员→旁白。不碰 DB。含跨轮复述检测 | `runSceneTurnNamed`, `runSceneTurn`(旧), `pickNextSpeaker`, `runActor`, `runNarration`, `validateBeats` |
+| `run-scene-turn.ts` | 1198 | **场景引擎内核**（点名版）。逐拍点名→演员→旁白。不碰 DB。跨轮复述检测逻辑抽到 repeat-detect.ts | `runSceneTurnNamed`, `runSceneTurn`(旧), `pickNextSpeaker`, `runActor`, `runNarration`, `validateBeats` |
 | `scene-wiring.ts` | 1276 | **场景引擎接线层**。读 DB 上下文 → 组装 SceneTurnInput → 调内核 → 落库。含剧本分支 + 数值&气氛判定 + 做梦 + 对话原文 embedding | `advanceScene`, `getSceneEngine`, `judgeStatsAndAmbient`, `generateScenarioDream` |
 | `scene-schema.ts` | 178 | **场景引擎统一建表 SQL**（scene_* + turn_memory_* 全部表，含全字段+FK）。db/index.ts 启动时执行，各 ensureX 幂等空转 | `SCENE_SCHEMA_SQL` |
 | `scene-session.ts` | 26 | 场景会话建表入口（幂等空转，SQL 收拢到 scene-schema.ts） | `ensureSceneSession` |
@@ -71,6 +71,14 @@ infinite-date-v2/
 | `stats-functions.ts` | 89 | 数值结算函数注册表（导演定值 → 函数算值 → 旁白报结果） | `statsFns`, `resolveStatsConfig` |
 | `session-mutex.ts` | 91 | 会话互斥检查（explore/conversation/mission 三选一） | `getActiveLiveSlot`, `hasActiveConversationSession` |
 | `clean-text.ts` | 45 | 清洗游离右闭符号（Gemma 偶发多出 `）`/`"`） | `cleanStraySymbols` |
+| `repeat-detect.ts` | 24 | 复述检测纯函数（无 DB/LLM 依赖，独立成文件供测试直接 import） | `extractLastPlayerLine` |
+| `divination.ts` | 594 | **摇卦起卦**。纳甲筮法排盘（铜钱法/yaoGua/六亲映射/旺衰生克/空亡） | `loadHexagrams`, `yaoGua`, `linesToGua`, `ganZhiOfDay`, `yueJianOfDay`, `kongWangOfDay` |
+| `hexagram-prompt.ts` | 217 | **卦象 → prompt 文本**。起卦种子 + 卦象四层渲染（本卦/互卦/变卦/错卦 + 纳甲人物关系层） | `buildDivinationSeed`, `castHexagram`, `renderHexagramLayer`, `renderNajiaLayer` |
+| `world-theme.ts` | 193 | **世界任务主题**。主题/目标列表 + 随机掷取（确定性种子） | `THEME_LIST`, `rollTheme`, `rollGoal`, `renderThemeGuide`, `renderGoalGuide` |
+| `theme-name-pools.ts` | 33 | 各主题的地名/人名池 | `THEME_NAME_POOLS` |
+| `theme-world-pools.ts` | 57 | 各主题的地点池/角色池 | `THEME_PLACE_POOLS`, `THEME_ROLE_POOLS` |
+| `name-pool.ts` | 128 | 世界卡牌掷取（地名/人名/困境/物品等） | `rollWorldCards`, `renderWorldCards` |
+| `name-pool-data.ts` | 5 | 中文人名池数据（男女各数百个） | `MALE_NAMES`, `FEMALE_NAMES` |
 | `auth.ts` | 96 | 认证（邀请码 → player_id → session token）+ 管理员校验 | `requireAuth`, `requireAdmin`, `issueToken`, `validateInviteCode` |
 | `wiki-search.ts` | 137 | IP角色搜索（MediaWiki API，免key免Docker） | `searchCharacter` |
 | `util.ts` | 20 | 通用工具 | `genId`, `now`, `jsonParse` |
@@ -187,9 +195,13 @@ infinite-date-v2/
 | | POST | `/moments` | 发朋友圈 |
 | | POST | `/moments/:mid/comment` | 评论 |
 | | POST | `/moments/:mid/like` | 点赞 |
-| **mission.ts** | POST | `/missions/generate` | 生成任务 |
+| **mission.ts** | POST | `/missions/divine` | 摇卦起卦（纳甲筮法，种子=玩家+时辰+序号） |
+| | POST | `/missions/generate` | 生成世界任务（卦象驱动 worldgen） |
 | | GET | `/missions` | 任务列表 |
-| | POST | `/missions/:mid/accept` | 接任务 |
+| | POST | `/missions/:mid/accept` | 接任务（选同行 NPC） |
+| | POST | `/missions/:mid/decline` | 拒绝任务 |
+| | GET | `/missions/friends` | 可同行好友列表 |
+| | POST | `/missions/end` | 结束任务（评级发权限） |
 | **creation.ts** | POST | `/creation/start` | 角色创建对话 |
 | | POST | `/creation/:sid/chat` | 创建中对话 |
 | | POST | `/creation/:sid/finalize` | 完成创建 |
@@ -218,7 +230,9 @@ infinite-date-v2/
 | **feedback.ts** | GET | `/suggestions` | 反馈列表 |
 | | POST | `/suggestions` | 提交反馈 |
 | | GET | `/changelog` | 更新日志 |
-| **email.ts** | GET | `/emails` | 邮件 |
+| **email.ts** | GET | `/emails` | 邮件列表 |
+| | POST | `/emails/:emailId/read` | 标记已读 |
+| | GET | `/emails/unread-count` | 未读数 |
 | **settings.ts** | GET | `/settings` | 设置 |
 | **fish.ts** | POST | `/fish/chat` | 钓鱼模式 |
 | **tutorial.ts** | POST | `/tutorial/init` | 初始化教程 |
@@ -248,6 +262,7 @@ infinite-date-v2/
 | `ScenarioConversation.tsx` | 328 | `scenario-conversation` | 剧本对话 |
 | `ScenarioDream.tsx` | 100 | `scenario-dream` | 剧本做梦 |
 | `ScenarioSceneList.tsx` | 115 | `scenario-scene-list` | **场景剧本列表**（选NPC→enter→跳场景版） |
+| `ScenarioSceneDetail.tsx` | 288 | `scenario-scene-detail` | 场景剧本详情（参数配置页） |
 | `ScenarioSceneApp.tsx` | 536 | `scenario-scene` | **场景剧本对话**（SSE气泡+数值面板+气氛组+做梦） |
 | `MomentsApp.tsx` | 233 | `moments` | 朋友圈 |
 | `FactsApp.tsx` | 257 | `facts` | 玩家事实 |
@@ -289,25 +304,26 @@ infinite-date-v2/
 
 | 文件 | 行数 | 用途 | 调用方 |
 |---|---|---|---|
-| `scene.actor.txt` | 58 | **场景引擎演员**（点名版，核心）。含【不重复】原则 | run-scene-turn.ts runActor |
-| `scene.director.txt` | 108 | 旧导演（已标注过时，保留回退） | run-scene-turn.ts runSceneTurn(旧) |
-| `scene.namer.txt` | 16 | **点名版选人** | run-scene-turn.ts pickNextSpeaker |
-| `scene.greeting.txt` | 33 | 场景开场（按circumstance分节） | scene-wiring.ts |
-| `roleplay.system.txt` | 74 | 旧系统角色扮演（短信/老约会）。含【不重复、不模仿】原则 | builder.ts buildSystemPrompt |
-| `character-card.txt` | 27 | 角色卡模板 | character-card.ts |
-| `group.system.txt` | 69 | 旧群聊约会 | builder.ts buildGroupSystemPrompt |
-| `scenario.system.txt` | 52 | 剧本系统 | scenario.ts |
-| `scenario.dream.txt` | 23 | 剧本做梦 | scenario.ts |
-| `scenario.roll.txt` | 23 | 剧本掷骰 | scenario.ts |
-| `scenario.stats-roll.txt` | 29 | 剧本数值生成 | scenario.ts |
-| `scenario.stats-judge.txt` | 36 | 剧本数值判定+气氛组生成（合并调用） | scene-wiring.ts judgeStatsAndAmbient |
-| `scenario-group.system.txt` | 75 | 剧本群聊 | scenario.ts |
-| `explore.system.txt` | 29 | 旧探索系统 | explore.ts |
-| `explore.continue.txt` | 41 | 旧探索继续 | explore.ts |
-| `mission.evaluator.txt` | 28 | 任务评级 | mission.ts |
-| `mission.worldgen.txt` | 43 | 原创世界生成 | mission.ts |
-| `deity.system.txt` | 50 | 主神系统 | sms.ts |
-| `deity.creation.system.txt` | 106 | 主神创建角色 | creation.ts |
+| `scene.actor.txt` | 65 | **场景引擎演员**（点名版，核心）。含【不重复】原则 | run-scene-turn.ts runActor |
+| `scene.namer.txt` | 15 | **点名版选人**（生产默认） | run-scene-turn.ts pickNextSpeaker |
+| `scene.namer.v2.txt` | 9 | 点名版选人 v2（AB 实验备选，经 templates.namer 覆盖启用） | run-scene-turn.ts |
+| `scene.namer.v1.bak.txt` | 9 | v1 备份（不参与生产） | — |
+| `scene.greeting.txt` | 32 | 场景开场（按circumstance分节） | scene-wiring.ts |
+| `roleplay.system.txt` | 65 | 旧系统角色扮演（短信/老约会）。含【不重复、不模仿】原则 | builder.ts buildSystemPrompt |
+| `character-card.txt` | 26 | 角色卡模板 | character-card.ts |
+| `group.system.txt` | 68 | 旧群聊约会 | builder.ts buildGroupSystemPrompt |
+| `scenario.dream.txt` | 22 | 剧本做梦 | scene-wiring.ts |
+| `scenario.roll.txt` | 22 | 剧本掷骰 | scene-scenario.ts |
+| `scenario.stats-roll.txt` | 28 | 剧本数值生成 | scene-scenario.ts |
+| `scenario.stats-judge.txt` | 42 | 剧本数值判定+气氛组生成（合并调用） | scene-wiring.ts judgeStatsAndAmbient |
+| `explore.system.txt` | 28 | 旧探索系统 | explore.ts |
+| `explore.continue.txt` | 40 | 旧探索继续 | explore.ts |
+| `mission.evaluator.txt` | 27 | 任务评级 | mission.ts |
+| `mission.worldgen.txt` | 73 | 原创世界生成（生产默认） | mission.ts |
+| `mission.worldgen-goal.txt` | 71 | 世界生成 goal 版（AB 实验备选） | scripts/ab-worldgen-goal.ts |
+| `mission.worldgen-grounded.txt` | 71 | 世界生成 grounded 版（AB 实验备选） | scripts/ab-worldgen-grounded.ts |
+| `deity.system.txt` | 48 | 主神系统 | builder.ts |
+| `deity.creation.system.txt` | 107 | 主神创建角色 | creation.ts |
 
 > **改任何 .txt 后需重启后端**（loadPrompt 有 Map 缓存）。
 
@@ -403,7 +419,7 @@ moment-scheduler.ts (5min tick)
 ## 七、数据库
 
 - **DB 文件**：`data/infinite-date.sqlite`（`IDATE_DATA_DIR` 环境变量可覆盖）
-- **建表 SQL**：`db/schema.ts` → `SCHEMA_SQL`（旧系统 41 张表）；`lib/scene-schema.ts` → `SCENE_SCHEMA_SQL`（场景引擎 10 张表，含全字段+FK）。两者都在所有 migration 之前执行
+- **建表 SQL**：`db/schema.ts` → `SCHEMA_SQL`（旧系统 44 张表）；`lib/scene-schema.ts` → `SCENE_SCHEMA_SQL`（场景引擎 11 张表，含全字段+FK）。两者都在所有 migration 之前执行
 - **Migration**：`db/index.ts` → `migration()` 函数（ALTER TABLE 增量，幂等 + duplicate-column 安全跳过）
 - **操作铁律**：不停服务，用独立 node 进程操作 DB（见 skill `db-operations-without-downtime`）
 - **只读查询**：`sqlite3 data/infinite-date.sqlite "SELECT ..."`
@@ -423,11 +439,14 @@ moment-scheduler.ts (5min tick)
 | **记忆** | `memory_embeddings` | 向量检索（跨场累积） |
 | | `turn_memory_fold` / `turn_player_facts` | 场景引擎按轮记忆 |
 | **通用** | `players` / `friendships` / `characters` / `character_player_data` / `character_permissions` | 玩家/角色/关系 |
-| | `moments` / `moment_comments` / `moment_likes` | 朋友圈 |
-| | `scenarios` / `scenario_sessions` / `scenario_messages` | 剧本 |
+| | `moments` / `moment_interactions` | 朋友圈 |
+| | `emails` | 邮件（系统通知 + 男主来信） |
+| | `missions` | 卦象世界任务（quest_type='world'，含评级/奖励） |
+| | `scenarios` / `scenario_sessions` / `scenario_messages` | 旧剧本 |
 | | `image_blobs` | 图片二进制 |
 | | `llm_call_log` | LLM调用日志（24h自动清理） |
 | | `permissions` / `invite_codes` | 权限/邀请 |
+| | `player_llm_configs` | per-player LLM 配置（base_url/api_key/model，未填回落 env） |
 
 ---
 

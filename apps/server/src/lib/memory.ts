@@ -16,8 +16,19 @@ import type { CharacterData } from '@idate/shared';
 // 每 N 条消息触发一次滚动折叠
 const FOLD_INTERVAL = 10;
 
-// ─── 并发去重：同一 session 的 foldChronicle 同时只跑一个 ─────────
+// ─── 并发去重：同一折叠目标同时只跑一个 ─────────
+// key 约定（命名空间前缀，避免不同折叠来源串号）：
+//   conv:<sessionId>                 单聊约会收尾折叠
+//   sms:<threadId>                   短信滚动折叠
+//   group:<sessionId>:<characterId>  群聊折叠（每角色独立视角）
 const inflightFolds = new Map<string, Promise<void>>();
+
+async function withFoldLock(key: string, fn: () => Promise<void>): Promise<void> {
+  if (inflightFolds.has(key)) return;  // 已在跑，跳过本次调用
+  const promise = fn().finally(() => { inflightFolds.delete(key); });
+  inflightFolds.set(key, promise);
+  return promise;
+}
 
 // ─── Chronicle 折叠 ─────────────────────────────────────────────
 
@@ -98,6 +109,7 @@ ${dialogText}`;
     temperature: 0.3,
     maxTokens: 512,
     guidedJson: CHRONICLE_SCHEMA,
+    playerId,
   });
 
   const parsed = tryParseJsonReply(result.content);
@@ -116,8 +128,8 @@ ${dialogText}`;
   // 写 chronicles 表（带消息范围标记）
   const chronicleId = genId();
   db.prepare(`
-    INSERT INTO chronicles (id, player_id, character_id, character_instance_id, session_id, summary, key_memories, msg_start, msg_end, created_at, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO chronicles (id, player_id, character_id, character_instance_id, session_id, summary, key_memories, msg_start, msg_end, created_at, summary_type, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'segment', ?)
   `).run(
     chronicleId, playerId, characterId, characterInstanceId, sessionId,
     summary, JSON.stringify(keyMemories), msgStart, msgEnd, now(), source,
@@ -234,11 +246,21 @@ const SMS_FOLD_INTERVAL = 10;
  * 短信滚动折叠 — 每N条短信消息折叠一次
  * 用 thread_id 作为标识，chronicle.session_id 存 threadId
  */
-export async function maybeFoldSmsIncremental(
+export function maybeFoldSmsIncremental(
   threadId: string,
   playerId: string,
   characterId: string,
   skipPlayerFacts: boolean = false,
+): Promise<void> {
+  // 并发去重：同一 thread 同时只跑一个短信折叠
+  return withFoldLock(`sms:${threadId}`, () => _maybeFoldSmsIncrementalImpl(threadId, playerId, characterId, skipPlayerFacts));
+}
+
+async function _maybeFoldSmsIncrementalImpl(
+  threadId: string,
+  playerId: string,
+  characterId: string,
+  skipPlayerFacts: boolean,
 ): Promise<void> {
   const msgCount = db.prepare('SELECT COUNT(*) as cnt FROM text_messages WHERE thread_id = ?').get(threadId) as { cnt: number };
   if (msgCount.cnt < SMS_FOLD_INTERVAL) return;
@@ -289,22 +311,20 @@ export async function maybeFoldSmsIncremental(
 
 /**
  * 约会结束时收尾折叠 — 处理剩余未总结的消息 + 生成session整体摘要
- * 并发去重：同一 session 同时只跑一个 foldChronicle，后续调用等前者完成后自动跳过
+ * 并发去重：同一 session 同时只跑一个 foldChronicle，后续调用自动跳过
  */
-export async function foldChronicle(
+export function foldChronicle(
   sessionId: string,
   playerId: string,
   characterId: string,
   characterInstanceId: string | null,
   skipPlayerFacts: boolean = false,
 ): Promise<void> {
-  // 如果该 session 已有折叠在进行中，直接返回（不重复折叠）
-  if (inflightFolds.has(sessionId)) return;
-
-  const promise = _foldChronicleImpl(sessionId, playerId, characterId, characterInstanceId, skipPlayerFacts)
-    .finally(() => { inflightFolds.delete(sessionId); });
-  inflightFolds.set(sessionId, promise);
-  return promise;
+  // 并发去重：同一 session 同时只跑一个 foldChronicle，后续调用自动跳过
+  return withFoldLock(
+    `conv:${sessionId}`,
+    () => _foldChronicleImpl(sessionId, playerId, characterId, characterInstanceId, skipPlayerFacts),
+  );
 }
 
 async function _foldChronicleImpl(
@@ -405,7 +425,7 @@ ${fragmentText}`;
     const result = await chat([
       { role: 'system', content: overviewSystem },
       { role: 'user', content: '请生成整体摘要。' },
-    ], { temperature: 0.3, maxTokens: 640, guidedJson: {
+    ], { temperature: 0.3, maxTokens: 640, playerId, guidedJson: {
       type: 'object',
       properties: {
         summary: { type: 'string' },
@@ -650,7 +670,16 @@ export function getUnifiedTimeline(
  * 群聊滚动折叠 — 对指定角色提取其参与的对话流
  * 其他角色的话作为"（旁人）"保留在上下文中
  */
-export async function maybeFoldGroupIncremental(
+export function maybeFoldGroupIncremental(
+  sessionId: string,
+  playerId: string,
+  characterId: string,
+): Promise<void> {
+  // 并发去重：同一群聊 session 下每个角色同时只跑一个折叠
+  return withFoldLock(`group:${sessionId}:${characterId}`, () => _maybeFoldGroupIncrementalImpl(sessionId, playerId, characterId));
+}
+
+async function _maybeFoldGroupIncrementalImpl(
   sessionId: string,
   playerId: string,
   characterId: string,
@@ -740,6 +769,7 @@ ${dialogText}`;
       temperature: 0.3,
       maxTokens: 512,
       guidedJson: CHRONICLE_SCHEMA,
+      playerId,
     });
 
     const parsed = tryParseJsonReply(result.content);
@@ -757,8 +787,8 @@ ${dialogText}`;
 
     const chronicleId = genId();
     db.prepare(`
-      INSERT INTO chronicles (id, player_id, character_id, character_instance_id, session_id, summary, key_memories, msg_start, msg_end, created_at, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chronicles (id, player_id, character_id, character_instance_id, session_id, summary, key_memories, msg_start, msg_end, created_at, summary_type, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'segment', ?)
     `).run(
       chronicleId, playerId, characterId, null, sessionId,
       summary, JSON.stringify(keyMemories), foldedUpTo, msgEnd, now(), 'group',
@@ -811,7 +841,16 @@ ${dialogText}`;
 /**
  * 群聊结束时的收尾折叠 — 对指定角色执行完整折叠
  */
-export async function foldGroupChronicle(
+export function foldGroupChronicle(
+  sessionId: string,
+  playerId: string,
+  characterId: string,
+): Promise<void> {
+  // 并发去重：同一群聊 session 下每个角色同时只跑一个折叠
+  return withFoldLock(`group:${sessionId}:${characterId}`, () => _foldGroupChronicleImpl(sessionId, playerId, characterId));
+}
+
+async function _foldGroupChronicleImpl(
   sessionId: string,
   playerId: string,
   characterId: string,
@@ -884,7 +923,7 @@ ${dialogText}`;
       const result = await chat([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: '请生成记忆摘要。' },
-      ], { temperature: 0.3, maxTokens: 512, guidedJson: CHRONICLE_SCHEMA });
+      ], { temperature: 0.3, maxTokens: 512, playerId, guidedJson: CHRONICLE_SCHEMA });
 
       const parsed = tryParseJsonReply(result.content);
       if (!parsed) break;
@@ -898,8 +937,8 @@ ${dialogText}`;
 
       const chronicleId = genId();
       db.prepare(`
-        INSERT INTO chronicles (id, player_id, character_id, character_instance_id, session_id, summary, key_memories, msg_start, msg_end, created_at, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'group')
+        INSERT INTO chronicles (id, player_id, character_id, character_instance_id, session_id, summary, key_memories, msg_start, msg_end, created_at, summary_type, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'segment', 'group')
       `).run(
         chronicleId, playerId, characterId, null, sessionId,
         summary, JSON.stringify(keyMemories), msgStart, msgEnd, now(),

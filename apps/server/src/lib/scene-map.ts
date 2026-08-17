@@ -83,6 +83,10 @@ export interface SceneNpc {
   role: string;
   name: string;
   persona: string;
+  /** 该 NPC 的常在地点（2-4字地名，如「观星台」；worldgen 生成，accept 时建成子地点，NPC 挂到该地点） */
+  place?: string;
+  /** 该 NPC 知道的线索内容（剧本杀式分发，worldgen 已把 knows 编号解析成具体内容） */
+  clues?: string[];
 }
 
 /** 读取某地点的路人列表 */

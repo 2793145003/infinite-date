@@ -163,12 +163,12 @@ export const SCENE_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_turn_mem_fold
     ON turn_memory_fold (player_id, scene_session_id, character_id, fold_type, round_max);
 
-  -- 场景内 PlayerFacts（NPC对玩家记忆）。scene_session_id 加 FK：同上
+  -- 场景内 PlayerFacts（NPC对玩家记忆）。scene_session_id 加 FK：删 session 级联删；手动添加的事实无场景来源，scene_session_id 允许 NULL
   CREATE TABLE IF NOT EXISTS turn_player_facts (
     id               TEXT PRIMARY KEY,
     player_id        TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     character_id     TEXT NOT NULL,
-    scene_session_id TEXT NOT NULL REFERENCES scene_sessions(id) ON DELETE CASCADE,
+    scene_session_id TEXT REFERENCES scene_sessions(id) ON DELETE CASCADE,
     round_no         INTEGER NOT NULL,
     fact             TEXT NOT NULL,
     created_at       INTEGER NOT NULL

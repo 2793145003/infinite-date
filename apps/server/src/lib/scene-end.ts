@@ -23,6 +23,7 @@ import { generateSmsGreeting } from '../routes/sms';
 import {
   foldTurnSegment,
   foldDateSummary,
+  HOT_WINDOW_N,
   type TurnLine,
 } from './turn-memory';
 import { DEITY_ID } from '@idate/shared';
@@ -71,21 +72,16 @@ export async function endSceneSession(
     return `${m.character_name || 'NPC'}：${m.text}`;
   }).join('\n');
 
-  // 有 segment 的轮次集合（跨角色去重）
-  const foldedRounds = new Set<number>();
-  const segRows = db.prepare(
-    `SELECT DISTINCT round_min FROM turn_memory_fold
-     WHERE scene_session_id = ? AND character_id != '__director__' AND fold_type = 'segment'`,
-  ).all(sessionId) as { round_min: number }[];
-  for (const r of segRows) foldedRounds.add(r.round_min);
-
   // 所有轮次
   const allRounds = db.prepare(
     `SELECT DISTINCT round_no FROM scene_messages
      WHERE scene_session_id = ? AND round_no > 0
      ORDER BY round_no ASC`,
   ).all(sessionId) as { round_no: number }[];
-  const roundsToFold = allRounds.map(r => r.round_no).filter(rn => !foldedRounds.has(rn));
+  // 只补折热窗轮（round ≤ HOT_WINDOW_N）：途中 round > N 的 segment 折叠由 runTurnMemoryUpdate 负责，
+  // refreshOverview 会把已折的 segment 折进 overview 并删除。若用「有没有 segment」判断「折没折过」，
+  // 会把已折进 overview 的轮误判为「没折过」而重复补折——正是 segment 堆积 → foldDateSummary 400 的根因。
+  const roundsToFold = allRounds.map(r => r.round_no).filter(rn => rn <= HOT_WINDOW_N);
 
   // 正式角色（跳过 DEITY）
   const formalCharIds = charIds.filter(cid => cid !== DEITY_ID);

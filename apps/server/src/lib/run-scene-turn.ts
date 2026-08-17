@@ -17,6 +17,7 @@ import { chat, chatJson } from '../llm/adapter';
 import { loadPrompt, renderPrompt, loadGreetingSection } from '../prompt/loader';
 import { statsFns, isValidStatsFn } from './stats-functions';
 import { cleanStraySymbols } from './clean-text';
+import { extractLastPlayerLine } from './repeat-detect';
 
 // ─── 类型 ─────────────────────────────────────────────
 
@@ -113,6 +114,8 @@ export interface SceneTurnInput {
     available_locations?: string;
     /** 距场景上一次互动已过去的时长（人类可读；无明显间隔则为空）。导演/演员据此感知时间流逝，不再被开场时刻语境带偏。 */
     time_elapsed?: string;
+    /** 环境线索（旁白可在相关情境自然带出；仅任务场景有，剧本/约会为空）。 */
+    environmental_clues?: string;
   };
   /** 在场角色 → 演员上下文（system 用 actor 模板填充的变量） */
   actors: Record<string, {
@@ -124,6 +127,8 @@ export interface SceneTurnInput {
     current_activity: string;
     chronicle_summary: string;
     retrieved_memories: string;
+    /** 任务场景下，该演员（同伴/居民）各自的立场——由代码逐人注入，不做「若你是……」条件判断 */
+    stance?: string;
   }>;
   /** 数值系统定义；空数组 = 纯闲聊场景 */
   stats_config?: StatsConfigItem[];
@@ -137,6 +142,8 @@ export interface SceneTurnInput {
   max_beats?: number;
   /** 当前时间（喂给演员模板） */
   current_time?: string;
+  /** 归属玩家 id：per-player LLM 配置（演员/旁白/字数检查/复述检测都走该玩家的配置） */
+  player_id?: string;
   /** 本轮是否存在真实玩家发言（区别于 continue 空推进）。用于「玩家发了话但导演只排了动作/无台本」时兜底补一句角色回应，杜绝发了没回复。 */
   has_player_turn_input?: boolean;
 }
@@ -212,7 +219,7 @@ function parseJsonLoose(text: string): unknown | null {
 
 // ─── 旁白 ─────────────────────────────────────────────
 
-export async function runNarration(build: string, logs?: (s: string) => void): Promise<string> {
+export async function runNarration(build: string, logs?: (s: string) => void, playerId?: string): Promise<string> {
   const res = await chat(
     [
       {
@@ -232,7 +239,7 @@ export async function runNarration(build: string, logs?: (s: string) => void): P
       },
       { role: 'user', content: build },
     ],
-    { temperature: 0.8, maxTokens: 4096, callType: 'narration' },
+    { temperature: 0.8, maxTokens: 4096, callType: 'narration', playerId },
   );
   // 截断检测：输出被 max_tokens 切断 → 只生成了半句/不完整旁白，丢弃（返回空，调用方跳过该拍）
   if (res.truncated) {
@@ -265,6 +272,7 @@ async function maybeAutoNarration(opts: {
   lastEmittedKind: () => string | null;   // 上一拍类型（旁白则跳过）
   setLastEmittedKind: (k: string) => void;
   emittedNarrationThisRound: Set<string>;
+  playerId?: string;
 }): Promise<boolean> {
   // 上一拍已是旁白 → 不连续旁白，跳过
   if (opts.lastEmittedKind() === 'narration') return false;
@@ -273,7 +281,7 @@ async function maybeAutoNarration(opts: {
   const build = opts.before
     ? `${timeHint}【当前情境】\n${opts.conversationSoFar}\n\n【即将】「${opts.speaker}」要开口了。请写一句说话前的环境/氛围铺垫旁白（可以映照他此刻的心情，或铺垫接下来的气氛）。注意：环境描写（天色、光线、声响）必须与当前时间吻合，不要脑补与时间矛盾的天色。`
     : `${timeHint}【当前情境】\n${opts.conversationSoFar}\n\n【刚发生】「${opts.speaker}」刚说完话。请写一句说话后的余韵/转场旁白（捕捉他话落之后的空气、反应，或自然过渡到下一节）。注意：环境描写（天色、光线、声响）必须与当前时间吻合，不要脑补与时间矛盾的天色。`;
-  const line = await runNarration(build, opts.log);
+  const line = await runNarration(build, opts.log, opts.playerId);
   if (!line.trim()) return false;
   const narrationCore = line.replace(/（[^（）]*）/g, '').replace(/\\([^()]*\\)/g, '').replace(/[。！？，、：；\s]/g, '').trim();
   if (narrationCore && opts.emittedNarrationThisRound.has(narrationCore)) return false;
@@ -402,6 +410,8 @@ export async function runActor(
     location_desc: input.scene.location_desc ?? '',
     available_locations: input.scene.available_locations ?? '',
     companions: input.scene.companions_raw ?? '',
+    scene_tone: input.scene.scene_tone ?? '',
+    scene_rules: [input.scene.scene_rules, actor.stance].filter(Boolean).join('\n'),
     beat_intent: beatIntent,
   });
   // 剧本场景无地点：location 为空时清理掉模板里残留的「地点：」空行
@@ -475,6 +485,7 @@ export async function runActor(
       normalize: normalizeActorOut,
       retryHint: () => 'texts 须为非空 string 数组（或 text 为非空 string），player_description/current_activity/internal 须为 string，internal_notable 须为 boolean',
       callType: 'actor',
+      playerId: input.player_id,
     },
   );
   if (!result) {
@@ -489,7 +500,7 @@ export async function runActor(
     const playerMsgNow = input.scene.player_message || '';
     // 只有任一条动描/台词里出现"一两三四五六七八九十+个字"（数字+个字）才触发额外LLM，平时零开销
     if (playerMsgNow && result.texts?.some((t: string) => /[一两三四五六七八九十]+个?字/.test(t))) {
-      const fixedTexts = await fixXGeZi(result.texts, playerMsgNow, logs, input.scene.player_name);
+      const fixedTexts = await fixXGeZi(result.texts, playerMsgNow, logs, input.scene.player_name, input.player_id);
       result.texts = fixedTexts;
       logs?.(`🔧 "X个字"字数修正完成: ${JSON.stringify(fixedTexts.map(s=>s.slice(0,20)))}`);
     }
@@ -498,9 +509,14 @@ export async function runActor(
   }
   // —— 复述检测 + LLM改写（程序检测首条bubble是否复述玩家话，命中则调LLM改写）——
   try {
-    const playerMsgNow = input.scene.player_message || '';
+    let playerMsgNow = input.scene.player_message || '';
+    // 重试/继续空推轮：本轮无新玩家消息（player_message 为空），但角色可能复述对话历史里
+    // 玩家最后一条话。从 conversationSoFar 末尾取玩家最近发言作检测锚点（只用于检测，不落库、不追加历史）。
+    if (!playerMsgNow) {
+      playerMsgNow = extractLastPlayerLine(conversationSoFar, playerName);
+    }
     if (playerMsgNow && result.texts?.length) {
-      const fixedTexts = await fixRepeatEcho(result.texts, playerMsgNow, logs, input.scene.player_name);
+      const fixedTexts = await fixRepeatEcho(result.texts, playerMsgNow, logs, input.scene.player_name, input.player_id);
       if (fixedTexts !== result.texts) {
         result.texts = fixedTexts;
         logs?.(`🔧 复述改写完成: ${JSON.stringify(fixedTexts.map(s => s.slice(0, 20)))}`);
@@ -548,6 +564,7 @@ export async function runActor(
               normalize: normalizeActorOut,
               retryHint: () => 'texts 须为非空 string 数组',
               callType: 'actor',
+              playerId: input.player_id,
             },
           );
           if (retryResult?.texts?.length && !dupCheck(retryResult.texts)) {
@@ -576,7 +593,22 @@ function _textSimilarity(a: string, b: string): number {
   if (!na || !nb) return 0;
   if (na === nb) return 1;
   if (na.includes(nb) || nb.includes(na)) return 0.85;
+  // 开头「第一句」重复检测：两条台词开口说的第一句相同（去动描括号、截到首个句末标点），
+  // 判定为复读。此前只比「完全相同/包含」，导致「制服我？！（瞳孔…）」与「制服我？！（凄厉…）」
+  // 这类「开头同句、后文不同」的复读漏掉——NPC 被重复点名时反复喊同一句。
+  const firstA = _firstSpokenSentence(a);
+  const firstB = _firstSpokenSentence(b);
+  if (firstA && firstA === firstB) return 0.85;
   return 0;
+}
+
+/** 提取台词「开口说的第一句」：去掉动描括号后，截取第一个句末标点（。！？…）前的内容 */
+function _firstSpokenSentence(s: string): string {
+  const noAction = s.replace(/（[^（）]*）/g, '').trim();
+  const m = noAction.match(/^([^。！？…!?]*)/);
+  const first = (m?.[1] ?? noAction).trim();
+  // 太短（单字）不判复读——「嗯」「好」这类口头禅重复由「完全相同」分支覆盖，避免过度误伤
+  return first.length >= 2 ? first : '';
 }
 
 // ─── "X个字" 字数错配修正函数 ─────────────────────────
@@ -606,6 +638,7 @@ async function fixXGeZi(
   playerMsg: string,
   logs?: (s: string) => void,
   playerName?: string,
+  playerId?: string,
 ): Promise<string[]> {
   const sysQuote =
     '玩家刚说了一句话，角色回应中出现了"X个字"（如"这两个字"），它指代玩家话里的某个词或短语。\n' +
@@ -624,7 +657,7 @@ async function fixXGeZi(
       // ① LLM抓指代对象(语义)
       const qres = await chatJson<{ quote: string }>(
         [{ role: 'system', content: sysQuote }, { role: 'user', content: `【玩家的话】${playerMsg}\n【角色回应】${t}` }],
-        { schema: { type: 'object', properties: { quote: { type: 'string' } }, required: ['quote'] }, temperature: 0, maxTokens: 300, maxRetries: 1, callType: 'xgezi-check' }
+        { schema: { type: 'object', properties: { quote: { type: 'string' } }, required: ['quote'] }, temperature: 0, maxTokens: 300, maxRetries: 1, callType: 'xgezi-check', playerId }
       );
       if (!qres) continue;
       const quote = _cleanQuote(qres.quote || '', playerName);
@@ -639,7 +672,7 @@ async function fixXGeZi(
       // ③ 字数对不上 → LLM重写
       const rw = await chat(
         [{ role: 'system', content: sysRewrite }, { role: 'user', content: `【玩家的原话】${playerMsg}\n【角色这时的原句】${t}\n【问题】"${xc === -1 ? '几' : xc}个字"与玩家实际核心"${quote}"（${qn}字）不符，请重写。` }],
-        { temperature: 0, maxTokens: 500, callType: 'xgezi-check' }
+        { temperature: 0, maxTokens: 500, callType: 'xgezi-check', playerId }
       );
       const rewritten = (rw.content || '').trim();
       if (rewritten) {
@@ -687,6 +720,7 @@ async function fixRepeatEcho(
   playerMsg: string,
   logs?: (s: string) => void,
   playerName?: string,
+  playerId?: string,
 ): Promise<string[]> {
   if (!texts.length) return texts;
   const first = texts[0] ?? '';
@@ -704,7 +738,7 @@ async function fixRepeatEcho(
             `请分析并改掉重复的部分。保持语义和情绪不变。`,
         },
       ],
-      { temperature: 0.85, maxTokens: 800, callType: 'repeat-echo-fix' },
+      { temperature: 0.85, maxTokens: 800, callType: 'repeat-echo-fix', playerId },
     );
     const full = (rw.content || '').trim();
     const match = full.match(/【结果】\s*([\s\S]*?)$/);
@@ -798,6 +832,7 @@ export async function pickNextSpeaker(
     temperature: 0.2,
     maxTokens: 80,
     callType: 'namer',
+    playerId: input.player_id,
   });
   const idx = typeof res?.pick === 'number' ? res.pick : NaN;
   const named = (available[idx - 1] ?? available[0])!; // 越界/NaN 兜底到第一个
@@ -907,8 +942,8 @@ export async function runSceneTurnNamed(
       }
       const ct = input.current_time ?? '';
       const timePrefix = ct ? `当前时间：${ct}。` : '';
-      const narrationBuild = `${timePrefix}当前地点：${locLabel}。${locDesc ? locDesc : ''}。${circumstanceInfo}。写一段环境旁白。注意：环境描写（天色、光线、声响）必须与当前时间吻合，不要脑补与时间矛盾的天色。`;
-      const narrationLine = await runNarration(narrationBuild, log);
+      const narrationBuild = `${timePrefix}当前地点：${locLabel}。${locDesc ? locDesc : ''}。${circumstanceInfo}。${input.scene.environmental_clues ? `环境线索（可在合适时自然带出，不必每次都提）：${input.scene.environmental_clues}。` : ''}写一段环境旁白。注意：环境描写（天色、光线、声响）必须与当前时间吻合，不要脑补与时间矛盾的天色。`;
+      const narrationLine = await runNarration(narrationBuild, log, input.player_id);
       if (narrationLine) {
         output.push({ kind: 'narration', content: narrationLine });
         onBeat?.({ kind: 'narration', content: narrationLine });
@@ -982,8 +1017,9 @@ export async function runSceneTurnNamed(
         continue;
       }
       const line = await runNarration(
-        `【当前情境】\n${convWithPlayer(conversationSoFar)}\n\n请写这一句旁白。`,
+        `【当前情境】\n${convWithPlayer(conversationSoFar)}${input.scene.environmental_clues ? `\n环境线索（可在合适时自然带出，不必每次都提）：${input.scene.environmental_clues}。` : ''}\n\n请写这一句旁白。`,
         log,
+        input.player_id,
       );
       if (!line.trim()) {
         log('↩️ 跳过空旁白拍（截断或生成失败）。');
@@ -1070,6 +1106,7 @@ export async function runSceneTurnNamed(
         lastEmittedKind: () => lastEmittedKind,
         setLastEmittedKind: (k) => { lastEmittedKind = k; },
         emittedNarrationThisRound,
+        playerId: input.player_id,
       });
     }
 
@@ -1128,6 +1165,7 @@ export async function runSceneTurnNamed(
         lastEmittedKind: () => lastEmittedKind,
         setLastEmittedKind: (k) => { lastEmittedKind = k; },
         emittedNarrationThisRound,
+        playerId: input.player_id,
       });
     }
 

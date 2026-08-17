@@ -131,6 +131,7 @@ async function genNarration(
   homeOwnerName?: string, // 若正在别人的家，捡到的物品应属于这位房主
   mode: 'system' | 'continue' = 'continue',
   aboutItem?: boolean, // 这一轮是"发现物品"：旁白必须描写发现的过程与物品所在，而非无关的环境
+  playerId?: string,
 ): Promise<RollResult> {
   const tpl = mode === 'system' ? 'explore.system' : 'explore.continue';
   const systemPrompt = renderPrompt(loadPrompt(tpl), {
@@ -175,6 +176,7 @@ async function genNarration(
       maxRetries: 2,
       normalize: (obj) => (typeof obj.narration === 'string' && obj.narration.trim() ? obj : null),
       callType: 'explore_narration',
+      playerId,
     });
     if (!parsed) throw new Error('探索场景解析失败');
     const p = parsed as unknown as Record<string, string>;
@@ -217,7 +219,7 @@ export async function sceneExploreRoutes(app: FastifyInstance): Promise<void> {
     const session = createExploreSession(playerId, locationId);
 
     // 首段旁白（强制纯环境描写，不 roll）——刚进来：用 system 模板，每次重新生成一段独特的开场
-    const result = await genNarration(loc.name, loc.summary, [], null, undefined, 'system');
+    const result = await genNarration(loc.name, loc.summary, [], null, undefined, 'system', undefined, playerId);
     const openingNarration = result.narration ?? '你走进这里，环顾四周。';
     addExploreMessage(session, 'narration', openingNarration);
 
@@ -262,7 +264,7 @@ export async function sceneExploreRoutes(app: FastifyInstance): Promise<void> {
     // 60% 旁白（LLM 可能顺带标一件物品；但在别人家里，物品不成立——家里不"捡东西"）
     if (roll < P_NARRATION) {
       const homeOwner = homeResidents.length > 0 ? (homeResidents[0] as { id: string; name: string }) : undefined;
-      const result = await genNarration(loc?.name ?? '', loc?.summary ?? '', history, text?.trim() || null, homeOwner?.name);
+      const result = await genNarration(loc?.name ?? '', loc?.summary ?? '', history, text?.trim() || null, homeOwner?.name, undefined, undefined, playerId);
       // 非家：LLM 顺带标了物品也算；家：一律按旁白，不出现"捡东西/拾获"交互
       const role = (!isHome && result.type === 'item') ? 'item' : 'narration';
       addExploreMessage(session, role, result.narration ?? '');
@@ -296,7 +298,7 @@ export async function sceneExploreRoutes(app: FastifyInstance): Promise<void> {
       const npc = pickRandom(pool);
       if (!npc) {
         // 无角色可遇 → 退化为旁白
-        const result = await genNarration(loc?.name ?? '', loc?.summary ?? '', history, text?.trim() || null);
+        const result = await genNarration(loc?.name ?? '', loc?.summary ?? '', history, text?.trim() || null, undefined, undefined, undefined, playerId);
         addExploreMessage(session, 'narration', result.narration ?? '');
         return reply.send({ type: 'narration', narration: result.narration });
       }
@@ -331,7 +333,7 @@ export async function sceneExploreRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // 非家：10% 物品 —— 这一轮专门发现物品，旁白必须与拾获的同一件事（让旁白和物品相关）
-    const result = await genNarration(loc?.name ?? '', loc?.summary ?? '', history, text?.trim() || null, undefined, 'continue', true);
+    const result = await genNarration(loc?.name ?? '', loc?.summary ?? '', history, text?.trim() || null, undefined, 'continue', true, playerId);
     const foundItem = result.type === 'item'
       ? { ownerName: result.itemOwnerName || '???', description: result.itemDescription || '' }
       : null;

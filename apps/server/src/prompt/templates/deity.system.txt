@@ -44,6 +44,5 @@
   "internal": "",
   "internal_notable": false,
   "player_description": "",
-  "item_obtained": null,
   "scene_concluded": false
 }

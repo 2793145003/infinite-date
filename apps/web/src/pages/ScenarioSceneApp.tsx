@@ -72,12 +72,18 @@ export function ScenarioSceneApp({
   // 剧本元数据
   const [title, setTitle] = useState('剧本');
   const [goal, setGoal] = useState('');
+  const [missionTitle, setMissionTitle] = useState('');
+  const [missionInfo, setMissionInfo] = useState<{ briefing?: string; worldTension?: string; targetState?: string; missionGoal?: string; worldName?: string; landmarks?: { name: string; feature: string }[]; coreNpcs?: { role: string; name: string; persona: string }[] } | null>(null);
+  const [playerRole, setPlayerRole] = useState('');
+  const [companionRole, setCompanionRole] = useState('');
+  const [showMissionInfo, setShowMissionInfo] = useState(false);
   const [goalAchieved, setGoalAchieved] = useState(false);
   const [statsConfig, setStatsConfig] = useState<StatsConfigItem[]>([]);
   const [statsState, setStatsState] = useState<Record<string, number>>({});
   const [statsChanges, setStatsChanges] = useState<Array<{ name: string; before: number; after: number; reason?: string }>>([]);
   const [dreamText, setDreamText] = useState<string | null>(null);
   const [ended, setEnded] = useState(false);
+  const [sceneType, setSceneType] = useState<string>('scenario');
 
   // 参与者
   const [participants, setParticipants] = useState<Array<{ characterId: string; name: string; avatar: string; isFriend: boolean }>>([]);
@@ -134,7 +140,12 @@ export function ScenarioSceneApp({
         setGoalAchieved(data.goalAchieved);
         setDreamText(data.dreamText);
         setEnded(data.ended);
+        setSceneType(data.sceneType ?? 'scenario');
         setGoal(data.goal);
+        setMissionTitle(data.missionTitle ?? '');
+        setMissionInfo(data.missionInfo ?? null);
+        setPlayerRole(data.playerRole ?? '');
+        setCompanionRole(data.companionRole ?? '');
         setParticipants(data.participants);
         const avMap: Record<string, string> = {};
         for (const p of data.participants) {
@@ -261,7 +272,11 @@ export function ScenarioSceneApp({
   const handleEnd = async () => {
     setEnding(true);
     try {
-      await api.sceneScenarioEnd(scenarioSessionId);
+      if (sceneType === 'mission') {
+        await api.endMission(scenarioSessionId);
+      } else {
+        await api.sceneScenarioEnd(scenarioSessionId);
+      }
       setEnded(true);
       setShowEndModal(false);
     } catch (e: any) {
@@ -317,11 +332,20 @@ export function ScenarioSceneApp({
       <div className="id-appbar">
         <button className="id-appbar-back" onClick={onBack}>←</button>
         <span className="id-appbar-title">{title}</span>
-        {goal && (
-          <span className="id-appbar-location" style={{ fontSize: '0.7rem', color: goalAchieved ? 'var(--success)' : 'var(--text-mute)' }}>
+        {sceneType === 'mission' && missionTitle ? (
+          <span
+            className="id-appbar-location"
+            style={{ cursor: 'pointer', color: goalAchieved ? 'var(--success)' : undefined }}
+            onClick={() => setShowMissionInfo(true)}
+            title="点击查看任务信息"
+          >
+            {goalAchieved ? '✓ ' : ''}{missionTitle.replace(/^世界任务：/, '')}
+          </span>
+        ) : goal ? (
+          <span className="id-appbar-location" style={{ color: goalAchieved ? 'var(--success)' : undefined }}>
             {goalAchieved ? '✓ 达成' : goal.length > 12 ? goal.slice(0, 12) + '…' : goal}
           </span>
-        )}
+        ) : null}
         {!ended && (
           <button className="id-appbar-action id-appbar-action-danger" onClick={() => setShowEndModal(true)} disabled={ending}>
             {ending ? '…' : '结束'}
@@ -496,9 +520,9 @@ export function ScenarioSceneApp({
       ) : (
         <div className="id-chat-input-area" style={{ flexDirection: 'column', alignItems: 'center', gap: '0.6rem', background: 'var(--surface)', padding: '1rem 0.8rem' }}>
           <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>
-            剧本已结束{goalAchieved ? ' · 目标达成 ✓' : ''}
+            {sceneType === 'mission' ? '任务已结束' : '剧本已结束'}{goalAchieved ? ' · 目标达成 ✓' : ''}
           </div>
-          {dreamText && (
+          {sceneType !== 'mission' && dreamText && (
             <div style={{
               fontSize: '0.78rem', color: 'var(--text-dim)', fontStyle: 'italic',
               textAlign: 'center', maxWidth: '92%', lineHeight: 1.6,
@@ -508,7 +532,7 @@ export function ScenarioSceneApp({
               💭 {dreamText.slice(0, 80)}{dreamText.length > 80 ? '…' : ''}
             </div>
           )}
-          <button className="id-btn" style={{ padding: '0.5rem 1.2rem' }} onClick={onBack}>返回剧本列表</button>
+          <button className="id-btn" style={{ padding: '0.5rem 1.2rem' }} onClick={sceneType === 'mission' ? () => onNavigate({ type: 'missions' }) : onBack}>{sceneType === 'mission' ? '返回任务列表' : '返回剧本列表'}</button>
         </div>
       )}
 
@@ -516,9 +540,11 @@ export function ScenarioSceneApp({
       {showEndModal && (
         <div className="id-modal-overlay" onClick={() => setShowEndModal(false)}>
           <div className="id-modal" onClick={e => e.stopPropagation()}>
-            <div className="id-modal-title">结束剧本？</div>
+            <div className="id-modal-title">{sceneType === 'mission' ? '结束任务？' : '结束剧本？'}</div>
             <div className="id-modal-desc">
-              结束后 NPC 会做梦，梦里会记得你们在剧本里经历的事。
+              {sceneType === 'mission'
+                ? '结束后会结算任务，评级并发放奖励。'
+                : '结束后 NPC 会做梦，梦里会记得你们在剧本里经历的事。'}
             </div>
             <div className="id-modal-actions">
               <button className="id-btn danger" onClick={() => handleEnd()} disabled={ending}>
@@ -527,6 +553,54 @@ export function ScenarioSceneApp({
               <button className="id-btn" onClick={() => setShowEndModal(false)} disabled={ending}>
                 继续剧本
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 任务信息弹窗 */}
+      {showMissionInfo && missionInfo && (
+        <div className="id-modal-overlay" onClick={() => setShowMissionInfo(false)}>
+          <div className="id-modal" onClick={e => e.stopPropagation()}>
+            <div className="id-modal-title">{missionTitle || '任务信息'}</div>
+            <div className="id-modal-desc" style={{ textAlign: 'left', maxHeight: '60vh', overflowY: 'auto' }}>
+              {playerRole ? (
+                <div style={{ marginBottom: '0.8rem' }}><strong>🧭 玩家身份</strong><br />{playerRole}</div>
+              ) : null}
+              {companionRole ? (
+                <div style={{ marginBottom: '0.8rem' }}><strong>💞 同行者身份</strong><br />{companionRole}</div>
+              ) : null}
+              {missionInfo.briefing ? (
+                <div style={{ marginBottom: '0.8rem' }}><strong>任务简报</strong><br />{missionInfo.briefing}</div>
+              ) : null}
+              {missionInfo.worldTension ? (
+                <div style={{ marginBottom: '0.8rem' }}><strong>⚡ 世界困境</strong><br />{missionInfo.worldTension}</div>
+              ) : null}
+              {missionInfo.targetState ? (
+                <div style={{ marginBottom: '0.8rem' }}><strong>🎯 目标态</strong><br />{missionInfo.targetState}</div>
+              ) : null}
+              {(missionInfo.landmarks ?? []).length > 0 ? (
+                <div style={{ marginBottom: '0.8rem' }}>
+                  <strong>📍 地标</strong>
+                  {missionInfo.landmarks!.map((l, i) => (
+                    <div key={i}>{l.name}：{l.feature}</div>
+                  ))}
+                </div>
+              ) : null}
+              {(missionInfo.coreNpcs ?? []).length > 0 ? (
+                <div style={{ marginBottom: '0.8rem' }}>
+                  <strong>👤 核心对象</strong>
+                  {missionInfo.coreNpcs!.map((n, i) => (
+                    <div key={i}>{n.name}：{n.persona}</div>
+                  ))}
+                </div>
+              ) : null}
+              {missionInfo.missionGoal ? (
+                <div style={{ marginBottom: '0.8rem' }}><strong>玩法目标</strong><br />{missionInfo.missionGoal}</div>
+              ) : null}
+            </div>
+            <div className="id-modal-actions">
+              <button className="id-btn" onClick={() => setShowMissionInfo(false)}>知道了</button>
             </div>
           </div>
         </div>

@@ -91,6 +91,7 @@ async function doFoldTurnSegment(opts: {
     ],
     {
       temperature: 0.3, maxTokens: 320,
+      playerId: opts.playerId,
       guidedJson: {
         type: 'object',
         properties: {
@@ -204,7 +205,7 @@ async function doRefreshOverview(opts: {
       { role: 'system', content: system },
       { role: 'user', content: `现有总览：\n${prev}\n\n新增单轮片段：\n${additions}` },
     ],
-    { temperature: 0.3, maxTokens: 384, guidedJson: { type: 'object', properties: { summary: { type: 'string' } } } as any },
+    { temperature: 0.3, maxTokens: 384, playerId: opts.playerId, guidedJson: { type: 'object', properties: { summary: { type: 'string' } } } as any },
   );
   const parsed = tryParseJsonReply(res.content);
   const summary = String(parsed?.summary ?? '').trim();
@@ -236,6 +237,35 @@ async function doRefreshOverview(opts: {
 /** 约会摘要的 fold_type（整场收尾，一次性生成） */
 export const DATE_SUMMARY_TYPE = 'date_summary';
 
+/** 场末折约会摘要时单批 segment 上限：超出先折中间摘要，防止 prompt 超限（gemma 16384） */
+const DATE_BATCH = 24;
+
+/** 把一批单轮摘要/中间摘要合并成一条阶段性摘要（foldDateSummary 分批折叠用） */
+async function foldMiddleSummary(opts: {
+  sceneSessionId: string;
+  playerId: string;
+  characterId: string;
+  characterName: string;
+  playerName: string;
+  items: string[];
+}): Promise<string | null> {
+  const system = `你是一个记忆整理系统。以下是一批单轮事件片段（属于「${opts.characterName}」与玩家「${opts.playerName}」的一场约会）。请把这一批片段合并成一条更简洁的阶段性摘要。
+要求：
+- 保留关键事件、对话要点、情绪转折，去掉重复和琐碎细节。
+- 用第三人称、简洁叙述（3-6句）。
+只输出 JSON。`;
+  const res = await chat(
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: opts.items.join('\n') },
+    ],
+    { temperature: 0.3, maxTokens: 512, playerId: opts.playerId, guidedJson: { type: 'object', properties: { summary: { type: 'string' } } } as any },
+  );
+  const parsed = tryParseJsonReply(res.content);
+  const summary = String(parsed?.summary ?? '').trim();
+  return summary || null;
+}
+
 /**
  * 场末生成整场约会摘要并入库 + 语义检索。
  * 一次 LLM：把该角色全部单轮摘要 + 现有总览整合成一条整场约会摘要。
@@ -263,6 +293,24 @@ export async function foldDateSummary(opts: {
     return null;
   }
 
+  // 分批折叠：segment 堆积时（异步竞态导致 refreshOverview 没及时折走），
+  // 先折成中间摘要再折最终，避免一次性塞超 gemma 16384 上下文。
+  let items: string[] = segs;
+  let guard = 0;
+  while (items.length > DATE_BATCH && guard < 4) {
+    const folded: string[] = [];
+    for (let i = 0; i < items.length; i += DATE_BATCH) {
+      const mid = await foldMiddleSummary({
+        sceneSessionId: opts.sceneSessionId, playerId: opts.playerId, characterId: opts.characterId,
+        characterName: opts.characterName, playerName, items: items.slice(i, i + DATE_BATCH),
+      });
+      if (mid) folded.push(mid);
+    }
+    if (!folded.length) break;
+    items = folded;
+    guard++;
+  }
+
   const system = `你是一个记忆整理系统。请为「${opts.characterName}」这一角色与该玩家「${playerName}」的这整场约会/场景，生成一条收尾约会摘要。
 要求：
 - 必须包含：什么时间（大致时段）、什么地点、两人做了什么事、互动中的关键情节。
@@ -273,9 +321,9 @@ export async function foldDateSummary(opts: {
   const res = await chat(
     [
       { role: 'system', content: system },
-      { role: 'user', content: `本场单轮摘要：\n${segs.join('\n')}\n\n长期总览：\n${ov || '（无）'}` },
+      { role: 'user', content: `本场单轮摘要：\n${items.join('\n')}\n\n长期总览：\n${ov || '（无）'}` },
     ],
-    { temperature: 0.3, maxTokens: 512, guidedJson: { type: 'object', properties: { summary: { type: 'string' } } } as any },
+    { temperature: 0.3, maxTokens: 512, playerId: opts.playerId, guidedJson: { type: 'object', properties: { summary: { type: 'string' } } } as any },
   );
   const parsed = tryParseJsonReply(res.content);
   const summary = String(parsed?.summary ?? '').trim();
@@ -463,23 +511,32 @@ export async function runTurnMemoryUpdate(
     foldPromises.push(foldDirectorNote({ sceneSessionId, playerId: input.playerId, directorSummary: input.directorSummary }));
   }
 
-  if (opts?.sync) await Promise.all(foldPromises);
-  else void Promise.all(foldPromises).catch(err =>
-    console.error(`[turn-memory] 折叠失败 scene=${sceneSessionId}:`, err instanceof Error ? err.message : err),
-  );
+  const foldAll = Promise.all(foldPromises);
+  if (opts?.sync) {
+    await foldAll;
+  } else {
+    foldAll.catch(err =>
+      console.error(`[turn-memory] 折叠失败 scene=${sceneSessionId}:`, err instanceof Error ? err.message : err),
+    );
+  }
 
   // 到 M 边界 → 增量刷新长期总览（总览 + 本批 I~M segment → 新总览，不全量重生成）
   if (atMBoundary) {
+    // 先等本批 segment 落库（foldTurnSegment 是 fire-and-forget 异步）：否则 refreshOverview 读不到
+    // 本批 segment，本批内容会延迟到下个 M 边界才折进 overview（overview 滞后一轮）。
+    // 注意：这不是 400 根因——400 根因是 scene-end 的 roundsToFold 重复补折（已另修）。
+    await foldAll;
     for (const ch of input.characters) {
       const mem = assembleRoleMemory({ sceneSessionId, playerId: input.playerId, characterId: ch.characterId, hotWindowRounds: [] });
-      const ov = refreshOverview({
-        sceneSessionId, playerId: input.playerId, characterId: ch.characterId, characterName: ch.characterName,
-        newSegments: mem.mid ? mem.mid.split('\n') : [],
-        existingOverview: mem.overview, playerName: input.playerName,
-      });
-      if (opts?.sync) await ov; else void ov.catch(err =>
-        console.error(`[turn-memory] 总览刷新失败 scene=${sceneSessionId} char=${ch.characterId}:`, err instanceof Error ? err.message : err),
-      );
+      try {
+        await refreshOverview({
+          sceneSessionId, playerId: input.playerId, characterId: ch.characterId, characterName: ch.characterName,
+          newSegments: mem.mid ? mem.mid.split('\n') : [],
+          existingOverview: mem.overview, playerName: input.playerName,
+        });
+      } catch (err) {
+        console.error(`[turn-memory] 总览刷新失败 scene=${sceneSessionId} char=${ch.characterId}:`, err instanceof Error ? err.message : err);
+      }
     }
   }
 
