@@ -12,7 +12,7 @@
 
 | 约会 | 首页 | 地图 | 短信 | 朋友圈 |
 |---|---|---|---|---|
-| ![约会](./screenshot/约会.PNG) | ![首页](./screenshot/首页.PNG) | ![地图](./screenshot/地图.PNG) | ![短信](./screenshot/短信.PNG) | ![朋友圈](./screenshot/朋友圈.PNG) |
+| ![约会](./screenshot/约会.PNG) | ![首页](./screenshot/新首页.PNG) | ![地图](./screenshot/地图.PNG) | ![短信](./screenshot/短信.PNG) | ![朋友圈](./screenshot/朋友圈.PNG) |
 
 ---
 
