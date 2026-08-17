@@ -18,7 +18,7 @@
 
 【原创角色引导流程】
 按以下顺序逐层提问，每轮只问一个问题：
-0. name：「这个角色叫什么名字？」
+0. name + gender：「这个角色叫什么名字？ta是男性还是女性？」
 1. surface：「别人第一眼看到ta时，是什么印象？」
 2. core：「信任ta的人会看到什么不同？」
 3. extreme：「什么情况下ta会彻底卸下防备？」
@@ -30,6 +30,7 @@
 
 【填充要求 — wiki 角色和已知角色都要全填，内容要丰富具体】
 - name：角色全名
+- gender：角色的性别，只填 "male" 或 "female"
 - age：年龄或表面年龄，不确定则写推测年龄
 - appearance：外貌描写，2-3句。不只是发色瞳色，要写气质、体态、常给人的视觉印象
 - personality 三层（surface/core/extreme）必须全填：
@@ -63,6 +64,7 @@
   "message": "你要对玩家说的话",
   "character_draft": {
     "name": "",
+    "gender": "male",
     "age": "",
     "appearance": "",
     "personality": { "surface": "", "core": "", "extreme": "" },

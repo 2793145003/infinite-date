@@ -162,6 +162,15 @@ export function CharacterEditModal({
                   {canDiff && <DiffHint original={orig('name')} current={draft.name} />}
                 </div>
                 <div className="id-card-row">
+                  <label>性别</label>
+                  <select value={draft.gender ?? ''} onChange={e => upd('gender', e.target.value)}>
+                    <option value="">未设定</option>
+                    <option value="male">男</option>
+                    <option value="female">女</option>
+                  </select>
+                  {canDiff && <DiffHint original={orig('gender')} current={draft.gender} />}
+                </div>
+                <div className="id-card-row">
                   <label>年龄</label>
                   <input value={draft.age ?? ''} onChange={e => upd('age', e.target.value)} />
                   {canDiff && <DiffHint original={orig('age')} current={draft.age} />}

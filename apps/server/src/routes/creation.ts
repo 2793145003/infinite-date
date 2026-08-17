@@ -119,7 +119,7 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
     ];
 
     try {
-      const result = await chat(messages, { temperature: 0.7, maxTokens: 2048, guidedJson: CREATION_SCHEMA });
+      const result = await chat(messages, { temperature: 0.7, maxTokens: 2048, guidedJson: CREATION_SCHEMA, playerId });
       const parsed = tryParseJsonReply(result.content);
 
       let message = '你想邀请谁进入你的轮回？';
@@ -207,7 +207,7 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
     );
 
     try {
-      const result = await chat(messages, { temperature: 0.75, maxTokens: 4096, guidedJson: CREATION_SCHEMA });
+      const result = await chat(messages, { temperature: 0.75, maxTokens: 4096, guidedJson: CREATION_SCHEMA, playerId });
       const parsed = tryParseJsonReply(result.content);
 
       let message = '继续描述吧';
@@ -265,6 +265,7 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
 
     const charData: CharacterData = {
       name,
+      gender: draft.gender === 'male' || draft.gender === 'female' ? draft.gender : undefined,
       age: String(draft.age ?? ''),
       appearance: String(draft.appearance ?? ''),
       personality: {

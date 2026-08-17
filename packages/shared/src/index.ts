@@ -45,6 +45,7 @@ export interface BackstoryMilestone {
 
 export interface CharacterData {
   name: string;
+  gender?: string; // 'male' | 'female'。角色性别（攻略对象不一定是男性）。旧数据缺失视为男性
   age: string;
   appearance: string;
   personality: Personality;
@@ -76,10 +77,7 @@ export interface LlmStructuredReply {
   internal: string;
   internal_notable: boolean;
   player_description: string;
-  item_obtained: boolean | null;
   scene_concluded: boolean;
-  environment?: string; // 任务模式下的环境旁白（空字符串=不产生旁白）
-  quest_npc_line?: string; // 任务对象（执念持有者）的台词，空字符串=本轮不说话
   current_location?: string; // 本轮结束时角色所在地点名称（移动了才填，没移动留空）
   need_search?: boolean; // NPC判断是否需要搜索记忆（短输入/nudge时）
   search_query?: string; // need_search=true时的检索query
