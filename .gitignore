@@ -10,7 +10,10 @@ dist/
 .env.*
 !.env.example
 uploads/
-data/
+data/*
+!data/hexagrams/
+data/hexagrams/*
+!data/hexagrams/*.json
 db-backups/
 .agent-admin-credentials
 
@@ -19,6 +22,8 @@ apps/server/src/scripts/ab-*.ts
 apps/server/src/scripts/ps-*.ts
 apps/server/src/scripts/repro-*.ts
 apps/server/src/scripts/fn-*.ts
+apps/server/src/scripts/inspect-*.ts
+apps/server/src/scripts/inspect-*.mjs
 apps/server/src/scripts/build-move-gold.cjs
 apps/server/src/scripts/dump-move-samples.*
 apps/server/src/prompt/templates/scene.namer.v*.txt
@@ -26,4 +31,10 @@ apps/server/src/prompt/templates/*.bak.txt
 apps/server/cleanup_orphan_turn.cjs
 docs/segments_rollback_*/
 apps/server/data/*.sqlite*
+__pycache__/
+*.pyc
+
+# 数据备份（含玩家邮箱等敏感信息，勿提交）
+backup_*.csv
+
 /docs/v3-archive
