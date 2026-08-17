@@ -192,6 +192,7 @@ CREATE TABLE IF NOT EXISTS emails (
   id            TEXT PRIMARY KEY,
   player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
   sender_type   TEXT NOT NULL DEFAULT 'system',
+  character_id  TEXT,
   subject       TEXT NOT NULL DEFAULT '',
   body          TEXT NOT NULL DEFAULT '',
   is_read       INTEGER NOT NULL DEFAULT 0,

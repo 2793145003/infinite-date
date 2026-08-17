@@ -12,6 +12,12 @@
  * - 玩家回复NPC朋友圈 → moment_urge 清零
  * - 约会结束 → 照发短信+朋友圈（不受意愿阻断），发完两个都清零
  *
+ * 情绪降温（不发"放手"式终结语）：
+ * - 短信意愿增量随「连续未被回应的主动消息数」衰减：增量 × 1/(1+未回应数)
+ * - 玩家越不理，短信越难攒够意愿，自然稀疏到几乎停发
+ * - 短信阶段只有 0=正常 / 1=疑惑；玩家一旦回复，计数归零、热情重置
+ * - 朋友圈（moment_urge）不受衰减影响
+ *
  * 这样短信和朋友圈各自独立累积、独立触发，节奏不固定。
  */
 import { db } from '../db';
@@ -21,6 +27,7 @@ import { retrieveRelevantMemories, maybeFoldSmsIncremental, getUnifiedTimeline }
 import { loadCharacterData, getCharacterName } from './character';
 import { getCurrentSchedule, getNpcCurrentLocationName, getNpcInviteLocationId, classifyPersonality } from './schedule';
 import { generateNpcMoment } from '../routes/moments';
+import { sendEmail } from '../routes/email';
 import type { CharacterData } from '@idate/shared';
 import { DEITY_ID } from '@idate/shared';
 import type { ChatMessage } from '../llm/adapter';
@@ -29,6 +36,9 @@ import type { ChatMessage } from '../llm/adapter';
 
 /** 每次行程变更的基础意愿增量（百分点） */
 const URGE_INCREMENT_BASE = 1;
+
+/** 写信（邮件）触发所需的「许久不回」时长：距玩家最后回短信超过此值才写信 */
+const LETTER_SILENCE_MS = 24 * 60 * 60 * 1000; // 24 小时
 
 // ─── 意愿读写 ──────────────────────────────────────────────
 
@@ -89,19 +99,38 @@ export async function checkScheduleChange(playerId: string): Promise<ProactiveSm
 
     const currLocName = currSchedule?.locationName ?? '';
 
-    // ── 累积意愿 ──────────────────────────────────
+    // ── 累积意愿（短信随连续未回应衰减，朋友圈不衰减） ──
     const personality = classifyPersonality(charData as unknown as Record<string, any>);
     const personalityMult = personality === 'extrovert' ? 1.2 : personality === 'introvert' ? 0.8 : 1.0;
     const jitter = 0.7 + Math.random() * 0.6;
-    const increment = URGE_INCREMENT_BASE * personalityMult * jitter;
 
-    const newSmsUrge = Math.min(100, (rel.sms_urge ?? 0) + increment);
-    const newMomentUrge = Math.min(100, (rel.moment_urge ?? 0) + increment);
+    // 连续没被回的主动消息越多，短信越难攒意愿——不发"算了"式终结语，只是渐渐不主动
+    const unansweredCount = getUnansweredProactiveCount(rel.thread_id);
+    const decay = 1 / (1 + unansweredCount);
 
-    // ── 摇骰子：短信 ──────────────────────────────
-    if (Math.random() < newSmsUrge / 100) {
-      const unansweredCount = getUnansweredProactiveCount(rel.thread_id);
-      const stage = Math.min(unansweredCount, 2) as 0 | 1 | 2;
+    const smsIncrement = URGE_INCREMENT_BASE * personalityMult * jitter * decay;
+    const momentIncrement = URGE_INCREMENT_BASE * personalityMult * jitter;
+
+    const newSmsUrge = Math.min(100, (rel.sms_urge ?? 0) + smsIncrement);
+    const newMomentUrge = Math.min(100, (rel.moment_urge ?? 0) + momentIncrement);
+
+    // ── 短信 / 写信 ──────────────────────────────
+    // 写信只在「玩家回过短信、之后许久不回」才触发：连续几条没回是必要条件，
+    // 还要距玩家最后回短信超过 LETTER_SILENCE_MS（许久）——刚回没多久就写信太激进。
+    const lastPlayerReply = db.prepare(
+      "SELECT MAX(created_at) AS ts FROM text_messages WHERE thread_id = ? AND sender = 'player'"
+    ).get(rel.thread_id) as { ts: number | null };
+    const longSilent = lastPlayerReply.ts != null && (ts - lastPlayerReply.ts >= LETTER_SILENCE_MS);
+
+    if (unansweredCount >= 2 && longSilent) {
+      // 连发两条短信都没回、且已许久不回 → 认定"短信联系不上"，改写信寄托思念，短信从此停发
+      // （防连发：generateProactiveLetter 内部查已写过信则跳过，玩家回短信才解锁）
+      await generateProactiveLetter(playerId, rel.thread_id, rel.character_id);
+      db.prepare('UPDATE relationships SET sms_urge = 0 WHERE player_id = ? AND character_id = ?')
+        .run(playerId, rel.character_id);
+    } else if (Math.random() < newSmsUrge / 100) {
+      // 只到"疑惑"为止，不再有"体谅放手"档
+      const stage = Math.min(unansweredCount, 1) as 0 | 1;
       const result = await generateProactiveSms(playerId, rel.thread_id, rel.character_id, stage);
       if (result) results.push(result);
       db.prepare('UPDATE relationships SET sms_urge = 0 WHERE player_id = ? AND character_id = ?')
@@ -191,13 +220,13 @@ export interface ProactiveSmsResult {
 /**
  * 生成一条主动短信
  *
- * @param stage 补发阶段：0=正常（在线/首次）, 1=疑惑, 2=体谅放手
+ * @param stage 补发阶段：0=正常（首次）, 1=疑惑（此前主动消息未被回应）
  */
 async function generateProactiveSms(
   playerId: string,
   threadId: string,
   characterId: string,
-  stage: 0 | 1 | 2,
+  stage: 0 | 1,
   displayTs?: number,
 ): Promise<ProactiveSmsResult | null> {
   const characterData = loadCharacterData(playerId, characterId);
@@ -260,14 +289,10 @@ async function generateProactiveSms(
       userPrompt = `（你想到了什么，主动给对方发条消息。简短、随意，符合你发短信的习惯。
 可以是分享日常、随口一句感慨、或者注意到什么想告诉对方。不要长篇大论。）`;
     }
-  } else if (stage === 1) {
-    // 疑惑——第2条未回应
+  } else {
+    // 疑惑——此前主动发了消息，对方一直没回。不发"放手"式终结语。
     userPrompt = `（你之前主动发了消息，但对方一直没回。你有点在意——可能发个"在忙吗？"或者换个话题。
 语气因你的性格而异——有的直接问，有的假装不在意地再找话聊。简短，不要显得焦虑或不满。）`;
-  } else {
-    // 体谅放手——第3条
-    userPrompt = `（你已经主动发了两条消息，对方都没回。你决定不再追问了——发最后一条，表示理解。
-可能是"看来你最近很忙，等你回来了再聊"或者"不打扰你了"之类的。语气因性格而异——有的洒脱，有的有点遗憾但不多说。简短。）`;
   }
 
   const messages: ChatMessage[] = [
@@ -275,7 +300,7 @@ async function generateProactiveSms(
     { role: 'user', content: userPrompt },
   ];
 
-  const reply_data = await generateReply(messages, { temperature: 0.9, maxTokens: 768 });
+  const reply_data = await generateReply(messages, { temperature: 0.9, maxTokens: 768, playerId });
 
   const result: ProactiveSmsResult = {
     threadId,
@@ -309,4 +334,81 @@ async function generateProactiveSms(
   maybeFoldSmsIncremental(threadId, playerId, characterId).catch(err => console.error('[proactive] maybeFoldSmsIncremental failed:', err instanceof Error ? err.message : err));
 
   return result;
+}
+
+// ─── 男主来信（邮件）生成 ──────────────────────────────
+
+/**
+ * 生成一封男主来信（写入 emails 表）
+ *
+ * 触发：连续两条主动短信未被回应（unansweredCount >= 2）→ 男主认定"短信联系不上了"，
+ *       改写信寄托思念。写信后短信停发，直到玩家回应（未回应计数归零）。
+ *
+ * 防连发：同一男主已写过一封（不管读没读）就不再写，直到玩家回短信才解锁，返回 false。
+ */
+async function generateProactiveLetter(
+  playerId: string,
+  threadId: string,
+  characterId: string,
+): Promise<boolean> {
+  const characterData = loadCharacterData(playerId, characterId);
+  if (!characterData) return false;
+
+  // 防连发：「写过就不写了」——已写过一封（不管读没读）就不再写，
+  // 直到玩家回短信（线程尾部出现 player 消息）才解锁。
+  const existing = db.prepare(`
+    SELECT 1 FROM emails e
+    WHERE e.player_id = ? AND e.sender_type = 'npc' AND e.character_id = ?
+      AND e.created_at > COALESCE((
+        SELECT MAX(tm.created_at) FROM text_messages tm
+        WHERE tm.thread_id = ? AND tm.sender = 'player'
+      ), 0)
+    LIMIT 1
+  `).get(playerId, characterId, threadId);
+  if (existing) return false;
+
+  const rel = db.prepare('SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { player_description: string; created_at: number } | undefined;
+  const recentMsgs = db.prepare("SELECT sender, body FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 10").all(threadId) as Array<{ sender: string; body: string }>;
+
+  const retrievedMemories = await retrieveRelevantMemories(
+    playerId, characterId,
+    recentMsgs.map(m => ({ role: m.sender, text: m.body })),
+    '',
+  );
+
+  const ctx: PromptContext = {
+    characterData,
+    playerDescription: rel?.player_description ?? '刚认识的陌生人',
+    playerProfile: getPlayerProfile(playerId),
+    chronicleSummary: getUnifiedTimeline(playerId, characterId),
+    recentMessages: recentMsgs.reverse().map(m => ({
+      role: (m.sender === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
+      text: m.body,
+    })),
+    isTextMessage: true,
+    isDeity: false,
+    locationName: getNpcCurrentLocationName(playerId, characterId, characterData, Date.now()) || '（写信时不确定位置）',
+    hubLocations: getHubLocationsText(),
+    retrievedMemories,
+    relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
+  };
+
+  const systemPrompt = buildSystemPrompt(ctx);
+
+  const userPrompt = `（你之前主动给对方发过几条短信，但对方一直没回。你以为短信可能联系不到对方了，于是决定写一封信给对方，寄托你的思念和牵挂。写一封真挚的信，符合你的性格和你们的关系——很熟可以亲昵些，不熟可以含蓄些。信可以有几段，比短信长，但不要过于沉重、卑微或怨怼，也不要在信里质问对方为什么一直不回，只自然地表达你的牵挂和近况。保持你一贯的风度。）`;
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+
+  const reply_data = await generateReply(messages, { temperature: 0.9, maxTokens: 1024, playerId });
+
+  const body = reply_data.messages.filter(Boolean).join('\n\n').trim();
+  if (!body) return false;
+
+  const name = characterData.name ?? '一个你认识的人';
+  sendEmail(playerId, 'npc', `${name}的信`, body, characterId);
+
+  return true;
 }

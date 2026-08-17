@@ -54,7 +54,7 @@ export function MailApp({
           <div className="id-email-detail">
             <h2>{currentEmail?.subject}</h2>
             <div className="id-email-meta">
-              {currentEmail?.sender_type === 'deity' ? '主神' : '系统'}
+              {currentEmail?.sender_name || (currentEmail?.sender_type === 'deity' ? '主神' : '系统')}
               {' · '}
               {currentEmail ? new Date(currentEmail.created_at).toLocaleString('zh-CN') : ''}
             </div>
