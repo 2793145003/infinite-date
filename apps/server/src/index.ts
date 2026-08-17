@@ -81,6 +81,9 @@ async function start() {
       await sceneNamedRoutes(api);
       await sceneExploreRoutes(api);
       await sceneScenarioRoutes(api);
+
+      // 健康检查（前端连接监测用，无认证）
+      api.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
     },
     { prefix: '/api' },
   );

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import type { PlayerInfo } from '../lib/api';
 import { api, clearToken } from '../lib/api';
-import { THEMES, getTheme, setTheme, type ThemeId, FONT_SCALES, getFontScale, setFontScale, type FontScaleId, getFishToggle, setFishToggle } from '../lib/themes';
+import { ImageUploadButton } from '../components/ImageUploadButton';
+import { THEMES, getTheme, setTheme, type ThemeId, FONT_SCALES, getFontScale, setFontScale, type FontScaleId, getFishToggle, setFishToggle, getCustomTheme, applyCustomTheme, DEFAULT_CUSTOM_THEME, type CustomTheme, HOME_BG_PRESETS, getHomeBg, setHomeBg, clearHomeBg, type HomeBg, getBgOverlay, setBgOverlay, DEFAULT_BG_OVERLAY, BG_OVERLAY_MAX } from '../lib/themes';
 
 export function SettingsApp({
   player,
@@ -21,6 +22,11 @@ export function SettingsApp({
   const [theme, setThemeState] = useState<ThemeId>(getTheme());
   const [fontScale, setFontScaleState] = useState<FontScaleId>(getFontScale());
   const [fishToggle, setFishToggleState] = useState(getFishToggle());
+  // 自定义皮肤
+  const [custom, setCustom] = useState<CustomTheme>(getCustomTheme());
+  const [showCustom, setShowCustom] = useState(getTheme() === 'custom');
+  const [homeBg, setHomeBgState] = useState<HomeBg>(getHomeBg);
+  const [bgOverlay, setBgOverlayState] = useState<number>(getBgOverlay);
 
   // LLM配置
   const [llm, setLlm] = useState({ baseUrl: '', apiKey: '', model: '' });
@@ -164,6 +170,181 @@ export function SettingsApp({
                 {theme === t.id && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
               </button>
             ))}
+
+            {/* 自定义皮肤 */}
+            <button
+              onClick={() => setShowCustom(!showCustom)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.7rem',
+                borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontFamily: 'inherit',
+                background: theme === 'custom' ? 'var(--card-bg-hover)' : 'transparent',
+                border: theme === 'custom' ? '1px solid var(--accent)' : '1px solid var(--border-soft)',
+                transition: 'all 0.15s',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '3px', flexShrink: 0 }}>
+                {[custom.base, custom.accent, custom.accent2].map((c, i) => (
+                  <div key={i} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: '1px solid rgba(255,255,255,0.1)' }} />
+                ))}
+              </div>
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>自定义</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)' }}>自己挑颜色，只对你生效</div>
+              </div>
+              {theme === 'custom' && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
+            </button>
+
+            {showCustom && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem', padding: '0.7rem', background: 'var(--card-bg-alt)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-soft)' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>背景主色</label>
+                    <input type="color" value={custom.base} onChange={e => {
+                      const next = { ...custom, base: e.target.value };
+                      setCustom(next); applyCustomTheme(next); setThemeState('custom');
+                    }} style={{ width: 34, height: 24, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0 }} />
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', marginTop: '0.15rem' }}>界面最底层的颜色</div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>强调色</label>
+                    <input type="color" value={custom.accent} onChange={e => {
+                      const next = { ...custom, accent: e.target.value };
+                      setCustom(next); applyCustomTheme(next); setThemeState('custom');
+                    }} style={{ width: 34, height: 24, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0 }} />
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', marginTop: '0.15rem' }}>你的气泡 + 高亮按钮</div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>次强调色</label>
+                    <input type="color" value={custom.accent2} onChange={e => {
+                      const next = { ...custom, accent2: e.target.value };
+                      setCustom(next); applyCustomTheme(next); setThemeState('custom');
+                    }} style={{ width: 34, height: 24, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0 }} />
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', marginTop: '0.15rem' }}>徽章、图标点缀</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>亮色模式</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', marginTop: '0.15rem' }}>浅底深字（适合浅色背景）</div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const next = { ...custom, isDark: !custom.isDark };
+                      setCustom(next); applyCustomTheme(next); setThemeState('custom');
+                    }}
+                    style={{
+                      flexShrink: 0, width: '44px', height: '26px', borderRadius: '13px',
+                      background: !custom.isDark ? 'var(--accent)' : 'var(--border)',
+                      border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', padding: 0,
+                    }}
+                  >
+                    <span style={{
+                      position: 'absolute', top: '3px', left: !custom.isDark ? '21px' : '3px',
+                      width: '20px', height: '20px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block',
+                    }} />
+                  </button>
+                </div>
+                <button
+                  className="id-btn sm"
+                  style={{ color: 'var(--text-mute)' }}
+                  onClick={() => {
+                    const next = { ...DEFAULT_CUSTOM_THEME };
+                    setCustom(next); applyCustomTheme(next); setThemeState('custom');
+                  }}
+                >
+                  恢复默认
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 主页背景 */}
+        <div className="id-card">
+          <div className="id-card-title">🖼️ 主页背景</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.4rem' }}>
+            <button
+              onClick={() => { clearHomeBg(); setHomeBgState({ type: 'none', value: '' }); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.7rem',
+                borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontFamily: 'inherit',
+                background: homeBg.type === 'none' ? 'var(--card-bg-hover)' : 'transparent',
+                border: homeBg.type === 'none' ? '1px solid var(--accent)' : '1px solid var(--border-soft)',
+                transition: 'all 0.15s',
+              }}
+            >
+              <div style={{ width: 40, height: 28, borderRadius: 6, flexShrink: 0, background: 'var(--phone-bg)', border: '1px solid var(--border-soft)' }} />
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>无</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)' }}>默认纯色光晕</div>
+              </div>
+              {homeBg.type === 'none' && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
+            </button>
+
+            {HOME_BG_PRESETS.map(p => {
+              const selected = homeBg.type === 'preset' && homeBg.value === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => { const bg: HomeBg = { type: 'preset', value: p.id }; setHomeBg(bg); setHomeBgState(bg); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.7rem',
+                    borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontFamily: 'inherit',
+                    background: selected ? 'var(--card-bg-hover)' : 'transparent',
+                    border: selected ? '1px solid var(--accent)' : '1px solid var(--border-soft)',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <div style={{ width: 40, height: 28, borderRadius: 6, flexShrink: 0, background: p.css, border: '1px solid var(--border-soft)' }} />
+                  <div style={{ flex: 1, textAlign: 'left' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)' }}>{p.desc}</div>
+                  </div>
+                  {selected && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
+                </button>
+              );
+            })}
+
+            <div style={{ padding: '0.6rem 0.7rem', border: '1px solid var(--border-soft)', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>自定义</div>
+                {homeBg.type === 'upload' && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', margin: '0.15rem 0 0.4rem' }}>上传自己的图作主页背景</div>
+              <ImageUploadButton
+                value={homeBg.type === 'upload' ? homeBg.value : undefined}
+                onUploaded={(imagePath) => { const bg: HomeBg = { type: 'upload', value: imagePath }; setHomeBg(bg); setHomeBgState(bg); }}
+                onClear={() => { clearHomeBg(); setHomeBgState({ type: 'none', value: '' }); }}
+              />
+            </div>
+
+            {/* 背景蒙版透明度滑杆 */}
+            <div style={{ padding: '0.6rem 0.7rem', border: '1px solid var(--border-soft)', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>背景压暗</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>{Math.round(bgOverlay * 100)}%</span>
+                  <button
+                    onClick={() => { setBgOverlay(DEFAULT_BG_OVERLAY); setBgOverlayState(DEFAULT_BG_OVERLAY); }}
+                    style={{ fontSize: '0.7rem', color: 'var(--accent)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}
+                  >重置</button>
+                </div>
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', margin: '0.15rem 0 0.4rem' }}>越左背景图越透亮，越右越压暗（保证文字可读）</div>
+              <input
+                type="range"
+                min={0}
+                max={BG_OVERLAY_MAX}
+                step={0.05}
+                value={bgOverlay}
+                onChange={e => { const v = parseFloat(e.target.value); setBgOverlay(v); setBgOverlayState(v); }}
+                style={{ width: '100%', accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
+            </div>
           </div>
         </div>
 
@@ -245,7 +426,10 @@ export function SettingsApp({
           {showLlm && (
             <div style={{ marginTop: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                配置 LLM API 用于角色自由对话回复。支持任何 OpenAI 兼容接口。
+                配置你自己的 LLM API，用于你所有的 AI 生成（角色回复、旁白、记忆摘要、主动短信等）。支持任何 OpenAI 兼容接口。
+              </p>
+              <p style={{ fontSize: '0.78rem', color: '#c77d2e' }}>
+                ⚠️ 会有很多调用——每句对话、每条旁白、每次记忆整理都会请求一次。自配 key 请留意用量和费用；不配置则用服务器默认。
               </p>
               <div>
                 <label style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>API Base URL</label>

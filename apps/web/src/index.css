@@ -11,6 +11,8 @@
   --border: #2d3548;
   --border-soft: #232a3d;
   --border-bright: #3d4868;
+  /* 毛玻璃高光边（磁贴/小组件描边，iOS 风格半透明白） */
+  --glass-edge: rgba(255,255,255,0.2);
 
   --text: #e8e6f0;
   --text-dim: #a8a4b8;
@@ -32,8 +34,8 @@
   --player-bubble-border: rgba(93,173,226,0.5);
   --npc-bubble-bg: rgba(34,42,64,0.88);
   --npc-bubble-border: #232a3d;
-  --bg-glow-1: rgba(232,168,56,0.10);
-  --bg-glow-2: rgba(93,173,226,0.08);
+  --bg-glow-1: rgba(232,168,56,0.22);
+  --bg-glow-2: rgba(93,173,226,0.18);
   --phone-bg: #060810;
   --phone-border: #2a3252;
   --phone-inset: #121626;
@@ -44,7 +46,7 @@
   --overlay-bg: rgba(13,17,23,0.6);
   --overlay-bg-hover: rgba(13,17,23,0.75);
   /* 背景图蒙版（ink色半透明，暗色压暗/亮色提亮） */
-  --bg-overlay: rgba(13,17,23,0.55);
+  --bg-overlay: rgba(13,17,23,0.3);
 
   /* App图标磁贴色 */
   --tile-cyan-c1: #131c2e;  --tile-cyan-c2: #0e1522;  --tile-cyan-bd: rgba(93,173,226,0.3);
@@ -54,13 +56,13 @@
   --tile-plum-c1: #1f1230;  --tile-plum-c2: #14081e;  --tile-plum-bd: rgba(178,124,226,0.3);
   --tile-ember-c1: #2a1012; --tile-ember-c2: #1a080a; --tile-ember-bd: rgba(224,122,130,0.3);
 
-  /* 组件背景色 */
-  --card-bg: var(--card-bg);
-  --card-bg-hover: var(--card-bg-hover);
-  --card-bg-alt: var(--card-bg-alt);
-  --card-bg-strong: var(--card-bg-strong);
-  --btn-bg: var(--btn-bg);
-  --btn-bg-hover: var(--btn-bg-hover);
+  /* 组件背景色（暗夜=深色，跟随主题深浅）——strong 用作磁贴/小组件的毛玻璃底，低透明度透背景图 */
+  --card-bg: rgba(26, 32, 48, 0.5);
+  --card-bg-hover: rgba(34, 42, 64, 0.6);
+  --card-bg-alt: rgba(26, 32, 48, 0.4);
+  --card-bg-strong: rgba(26, 32, 48, 0.15);
+  --btn-bg: rgba(61, 72, 104, 0.25);
+  --btn-bg-hover: rgba(61, 72, 104, 0.4);
 
   --radius: 12px;
   --radius-sm: 8px;
@@ -100,8 +102,8 @@
   --player-bubble-border: rgba(232,138,166,0.5);
   --npc-bubble-bg: rgba(42,30,24,0.88);
   --npc-bubble-border: #2f2218;
-  --bg-glow-1: rgba(232,168,56,0.12);
-  --bg-glow-2: rgba(232,138,166,0.08);
+  --bg-glow-1: rgba(232,168,56,0.24);
+  --bg-glow-2: rgba(232,138,166,0.18);
   --phone-bg: #0e0805;
   --phone-border: #3d2d24;
   --phone-inset: #1a120f;
@@ -151,8 +153,8 @@
   --player-bubble-border: rgba(125,207,159,0.5);
   --npc-bubble-bg: rgba(22,40,32,0.88);
   --npc-bubble-border: #1a2e26;
-  --bg-glow-1: rgba(125,207,159,0.10);
-  --bg-glow-2: rgba(232,168,56,0.06);
+  --bg-glow-1: rgba(125,207,159,0.22);
+  --bg-glow-2: rgba(232,168,56,0.16);
   --phone-bg: #050a08;
   --phone-border: #244038;
   --phone-inset: #0a1410;
@@ -203,8 +205,8 @@
   --player-bubble-border: rgba(74,141,184,0.45);
   --npc-bubble-bg: rgba(240,235,226,0.95);
   --npc-bubble-border: #e0dad0;
-  --bg-glow-1: rgba(196,122,90,0.06);
-  --bg-glow-2: rgba(74,141,184,0.05);
+  --bg-glow-1: rgba(196,122,90,0.16);
+  --bg-glow-2: rgba(74,141,184,0.12);
   --phone-bg: #ede8df;
   --phone-border: #d4cfc6;
   --phone-inset: #f5f1ea;
@@ -256,8 +258,8 @@
   --player-bubble-border: rgba(74,141,184,0.45);
   --npc-bubble-bg: rgba(242,242,244,0.95);
   --npc-bubble-border: #ececf0;
-  --bg-glow-1: rgba(74,141,184,0.04);
-  --bg-glow-2: rgba(196,148,42,0.03);
+  --bg-glow-1: rgba(74,141,184,0.10);
+  --bg-glow-2: rgba(196,148,42,0.08);
   --phone-bg: #f7f7f8;
   --phone-border: #e0e0e4;
   --phone-inset: #ffffff;
@@ -424,16 +426,58 @@ body {
 .id-app-scroll.no-pad { padding: 0; }
 
 /* === 手机桌面 === */
-.id-home-screen { flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0 1rem 1rem; }
+.id-home-screen {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0.6rem 1rem 1rem;
+  /* 默认背景：主题色光晕渐变（无自定义背景图时随主题变色） */
+  background:
+    radial-gradient(120% 62% at 50% -12%, var(--bg-glow-1), transparent 62%),
+    radial-gradient(140% 82% at 50% 112%, var(--bg-glow-2), transparent 62%),
+    var(--phone-bg);
+}
+/* 主页背景图：背景 + 主题蒙版（保证文字可读）。蒙版叠在背景上方 */
+.id-home-screen.has-home-bg {
+  background-image:
+    linear-gradient(var(--bg-overlay), var(--bg-overlay)),
+    var(--home-bg-image);
+  background-size: cover;
+  background-position: center;
+}
 
-/* App 图标网格 */
-.id-app-grid {
+/* App 图标：分两页横滑（每页 4 列）+ 底部圆点指示 */
+.id-app-pages {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  margin-top: auto;
+}
+.id-app-pages::-webkit-scrollbar { display: none; }
+.id-app-page {
+  flex: 0 0 100%;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 16px 8px;
+  scroll-snap-align: start;
   padding: 0.5rem 0;
 }
-@media (min-width: 600px) { .id-app-grid { grid-template-columns: repeat(5, 1fr); gap: 20px 12px; } }
+.id-app-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 0 0.35rem;
+}
+.id-app-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-bright);
+  transition: all 0.2s;
+}
+.id-app-dots span.is-active {
+  width: 16px;
+  border-radius: 3px;
+  background: var(--accent);
+}
 
 .id-app-icon {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
@@ -444,18 +488,14 @@ body {
   width: 52px; height: 52px; border-radius: 14px;
   display: flex; align-items: center; justify-content: center;
   font-size: 1.5rem; position: relative;
-  background: linear-gradient(145deg, var(--c1, var(--panel)), var(--c2, var(--ink-2)));
-  border: 1px solid var(--border-soft);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+  /* 毛玻璃：半透明中性底 + 背景模糊 */
+  background: var(--card-bg-strong);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  border: 1px solid var(--glass-edge);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.08);
 }
 @media (min-width: 600px) { .id-app-tile { width: 60px; height: 60px; font-size: 1.8rem; border-radius: 16px; } }
-.id-app-tile.is-cyan  { --c1: var(--tile-cyan-c1);  --c2: var(--tile-cyan-c2);  border-color: var(--tile-cyan-bd); }
-.id-app-tile.is-amber { --c1: var(--tile-amber-c1); --c2: var(--tile-amber-c2); border-color: var(--tile-amber-bd); }
-.id-app-tile.is-rose  { --c1: var(--tile-rose-c1);  --c2: var(--tile-rose-c2);  border-color: var(--tile-rose-bd); }
-.id-app-tile.is-sage  { --c1: var(--tile-sage-c1);  --c2: var(--tile-sage-c2);  border-color: var(--tile-sage-bd); }
-.id-app-tile.is-plum  { --c1: var(--tile-plum-c1);  --c2: var(--tile-plum-c2);  border-color: var(--tile-plum-bd); }
-.id-app-tile.is-ember { --c1: var(--tile-ember-c1); --c2: var(--tile-ember-c2); border-color: var(--tile-ember-bd); }
-.id-app-tile.is-dim   { --c1: var(--ink-2); --c2: var(--ink); border-color: var(--border-soft); opacity: 0.4; }
 .id-app-label { font-size: 0.65rem; color: var(--text-dim); text-align: center; line-height: 1.2; }
 .id-app-badge {
   position: absolute; top: -4px; right: -4px;
@@ -639,6 +679,9 @@ body {
 .id-deity-shortcut-btn { padding: 0.25rem 0.5rem; background: rgba(232,168,56,0.1); border: 1px solid rgba(232,168,56,0.2); border-radius: 6px; color: var(--amber); font-size: 0.72rem; cursor: pointer; font-family: inherit; transition: all 0.15s; }
 .id-deity-shortcut-btn:hover { background: rgba(232,168,56,0.2); }
 
+/* 线程顶部状态提示（对方正在休息） */
+.id-thread-status-banner { padding: 0.35rem 0.7rem; font-size: 0.72rem; color: var(--text-mute); background: rgba(120,160,200,0.08); border-bottom: 1px solid var(--border-soft); text-align: center; flex-shrink: 0; }
+
 /* === 角色卡编辑面板 === */
 .id-creation-card-panel { flex-shrink: 0; border-bottom: 1px solid var(--border-soft); max-height: 40%; display: flex; flex-direction: column; }
 .id-creation-card-toggle { padding: 0.4rem 0.6rem; background: rgba(120,180,200,0.08); border: none; border-bottom: 1px solid var(--border-soft); color: var(--cyan, #7cb8c8); font-size: 0.72rem; cursor: pointer; font-family: inherit; text-align: left; }
@@ -661,6 +704,7 @@ body {
 }
 .id-thread-item:hover { border-color: var(--border-bright); background: var(--card-bg-hover); }
 .id-thread-avatar {
+  position: relative;
   width: 40px; height: 40px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 1.2rem; flex-shrink: 0;
@@ -668,6 +712,13 @@ body {
 }
 .id-thread-avatar.deity { background: rgba(232,168,56,0.12); color: var(--amber); }
 .id-thread-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.id-thread-presence-dot {
+  position: absolute; right: 0; bottom: 0;
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--phone-inset, #121626);
+}
+.id-thread-presence-dot.online { background: var(--sage, #7dcf9f); }
+.id-thread-presence-dot.offline { background: var(--text-mute, #6b6880); }
 .id-thread-info { flex: 1; min-width: 0; }
 .id-thread-name { font-size: 0.9rem; font-weight: 600; color: var(--text); }
 .id-thread-preview { font-size: 0.75rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -814,22 +865,6 @@ body {
 .id-director-kind { font-weight: 600; color: var(--accent, #c49a6c); margin-right: 0.4rem; }
 .id-director-intent { color: var(--text-mid, #8a8a8a); }
 .id-director-sub { color: var(--text-dim); margin-left: 0.4rem; }
-
-/* 任务对象（执念持有者）居中气泡 */
-.id-quest-npc-bubble {
-  margin: 0.6rem auto;
-  max-width: 72%;
-  padding: 0.55rem 1rem;
-  background: rgba(196, 154, 108, 0.08);
-  border: 1px solid rgba(196, 154, 108, 0.25);
-  border-radius: 14px;
-  font-size: 0.86rem; line-height: 1.55;
-  color: var(--text);
-  text-align: center;
-  word-break: break-word; white-space: pre-wrap;
-  font-family: 'Georgia', 'Noto Serif SC', 'Songti SC', serif;
-  letter-spacing: 0.01em;
-}
 
 /* 三点动画 */
 .id-typing-dots { display: flex; gap: 4px; padding: 0.4rem 0.8rem; }
@@ -998,9 +1033,12 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 
 /* === 桌面 Widget === */
 .id-widget {
-  background: var(--card-bg-strong); border: 1px solid var(--border-soft);
-  border-radius: 12px; padding: 0.8rem 1rem; cursor: pointer;
+  background: var(--card-bg-strong); border: 1px solid var(--glass-edge);
+  border-radius: 16px; padding: 0.8rem 1rem; cursor: pointer;
   transition: all 0.15s; margin-bottom: 0.8rem;
+  height: 104px; display: flex; flex-direction: column; justify-content: center;
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
 }
 .id-widget:active { transform: scale(0.97); }
 .id-widget-label { font-size: 0.68rem; color: var(--text-mute); margin-bottom: 0.2rem; }
@@ -1014,6 +1052,24 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 }
 .id-widget-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
 .id-widget-hint { font-size: 0.72rem; color: var(--cyan); margin-top: 0.3rem; }
+
+/* 默认时钟 widget：柔和彩色渐变底（跟随主题），大字时间 */
+.id-widget-clock {
+  cursor: default;
+  position: relative;
+  background: var(--card-bg-strong);
+}
+.id-widget-clock:active { transform: none; }
+.id-widget-clock::before {
+  content: '';
+  position: absolute; inset: 0; border-radius: inherit;
+  background: linear-gradient(135deg, var(--accent, #7d5fff), var(--cyan, #5dade2));
+  opacity: 0.16;
+}
+.id-widget-clock > * { position: relative; z-index: 1; }
+.id-widget-clock-time { font-size: 1.55rem; font-weight: 700; font-family: var(--font-display, inherit); color: var(--text); letter-spacing: 0.03em; line-height: 1.1; }
+.id-widget-clock-date { font-size: 0.72rem; color: var(--text-mute); margin-top: 0.2rem; }
+.id-widget-clock-greet { font-size: 0.8rem; color: var(--accent, var(--amber, #e8b45a)); margin-top: 0.35rem; font-weight: 600; }
 
 /* === 待办跳转按钮 === */
 .id-mission-go-btn {
@@ -2122,7 +2178,7 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 
 .id-checkbox-row { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
 .id-checkbox-row input { width: 1.1rem; height: 1.1rem; cursor: pointer; }
-.id-checkbox-row span { font-size: 0.85rem; color: var(--text-secondary); }
+.id-checkbox-row span { font-size: 0.85rem; color: var(--text); }
 .id-checkbox-inline { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; font-size: 0.78rem; color: var(--text-mute); white-space: nowrap; }
 .id-checkbox-inline input { width: 1rem; height: 1rem; cursor: pointer; }
 .id-stats-header { align-items: center; }
@@ -2198,6 +2254,40 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 
 /* 通用 */
 .id-error-text { color: var(--ember, #e07060); font-size: 0.75rem; padding: 0.2rem 0; }
+
+/* 服务器维护横幅（全局覆盖，失联时显示，恢复自动隐藏） */
+.id-maintenance-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1rem;
+  background: rgba(20, 16, 28, 0.92);
+  border: 1px solid var(--border, rgba(125,95,255,0.3));
+  border-radius: 0 0 12px 12px;
+  color: var(--text, #e8e0f0);
+  font-size: 0.8rem;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  backdrop-filter: blur(8px);
+  animation: id-banner-in 0.25s ease;
+}
+.id-maintenance-dot {
+  width: 0.5rem; height: 0.5rem; border-radius: 50%;
+  background: var(--ember, #e07060);
+  animation: id-banner-pulse 1.2s ease-in-out infinite;
+}
+@keyframes id-banner-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes id-banner-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 .id-modal-close { width: 100%; margin-top: 0.5rem; padding: 0.5rem; background: none; border: 1px solid var(--border); border-radius: 8px; color: var(--text-mute); font-size: 0.8rem; cursor: pointer; font-family: inherit; }
 .id-modal-hint { font-size: 0.78rem; color: var(--text-mute); margin-bottom: 0.8rem; }
 .id-friend-picker { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -2389,3 +2479,369 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 .avatar-crop-corner.bl { bottom: -1px; left: -1px; border-right: none; border-top: none; }
 .avatar-crop-corner.br { bottom: -1px; right: -1px; border-left: none; border-top: none; }
 .avatar-crop-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.4rem; }
+
+/* ===== 摇卦界面 ===== */
+.id-divine-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(232,168,56,0.10), transparent 55%),
+    radial-gradient(100% 100% at 50% 100%, rgba(93,173,226,0.06), transparent 60%),
+    var(--phone-bg);
+  animation: id-divine-fade 0.3s ease;
+}
+@keyframes id-divine-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.id-divine-panel {
+  width: min(92vw, 360px);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 1.4rem 1.2rem 1.2rem;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(26,32,48,0.92), rgba(13,17,23,0.96));
+  border: 1px solid var(--border-bright);
+  box-shadow: 0 0 70px rgba(232,168,56,0.14), var(--shadow);
+}
+
+.id-divine-title { text-align: center; margin-bottom: 0.6rem; }
+.id-divine-title-main {
+  font-family: var(--font-display); font-size: 1.3rem; font-weight: 600;
+  color: var(--amber); letter-spacing: 0.1em;
+}
+.id-divine-title-sub { font-size: 0.72rem; color: var(--text-mute); margin-top: 0.3rem; letter-spacing: 0.08em; }
+
+/* 六爻区（固定高度防跳动，从下往上长） */
+.id-divine-hexagram {
+  width: 100%; min-height: 150px;
+  display: flex; align-items: center; justify-content: center;
+}
+.id-divine-empty { color: var(--text-mute); font-size: 0.78rem; letter-spacing: 0.12em; }
+.id-divine-yaos { display: flex; flex-direction: column-reverse; gap: 0.5rem; }
+
+.id-yao { display: flex; align-items: center; gap: 0.5rem; animation: id-yao-in 0.4s ease; }
+@keyframes id-yao-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.id-yao-mark { width: 1rem; display: flex; align-items: center; justify-content: center; color: var(--text-mute); flex-shrink: 0; }
+.id-yao-mark.is-dong { color: var(--amber); }
+.id-yao-dong-mark { position: relative; display: block; filter: drop-shadow(0 0 4px rgba(232,168,56,0.7)); }
+.id-yao-dong-mark.is-yang { width: 0.6rem; height: 0.6rem; border: 1.5px solid currentColor; border-radius: 50%; }
+.id-yao-dong-mark.is-yin { width: 0.6rem; height: 0.6rem; }
+.id-yao-dong-mark.is-yin::before,
+.id-yao-dong-mark.is-yin::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 0.68rem; height: 1.5px; background: currentColor; border-radius: 1px;
+}
+.id-yao-dong-mark.is-yin::before { transform: translate(-50%, -50%) rotate(45deg); }
+.id-yao-dong-mark.is-yin::after { transform: translate(-50%, -50%) rotate(-45deg); }
+
+.id-yao-bar { display: flex; align-items: center; justify-content: center; width: 132px; height: 8px; }
+.id-yao-seg {
+  display: block; height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, #a87c2a, #f0c96a);
+  box-shadow: 0 0 9px rgba(232,168,56,0.5);
+}
+.id-yao-bar.is-yang { gap: 0; }
+.id-yao-bar.is-yang .id-yao-seg { width: 132px; }
+.id-yao-bar.is-yin { gap: 10px; }
+.id-yao-bar.is-yin .id-yao-seg { width: 61px; }
+
+.id-yao-coins { display: flex; gap: 3px; flex-shrink: 0; }
+.id-yao-coins i { width: 6px; height: 6px; border-radius: 50%; }
+.id-yao-coins i.is-back { background: #c7d0e0; box-shadow: 0 0 4px rgba(200,215,235,0.7); }
+.id-yao-coins i.is-front { background: var(--amber); box-shadow: 0 0 4px rgba(232,168,56,0.7); }
+
+/* 三枚铜钱 */
+.id-divine-coins {
+  display: flex; gap: 1.1rem; align-items: center; justify-content: center;
+  margin: 0.6rem 0 0.8rem; perspective: 700px;
+}
+.id-coin {
+  position: relative; width: 58px; height: 58px;
+  perspective: 700px;
+}
+.id-coin-inner {
+  position: absolute; inset: 0;
+  transform-style: preserve-3d;
+}
+.id-coin-inner.is-front { transform: rotateY(0deg); }
+.id-coin-inner.is-back { transform: rotateY(180deg); }
+.id-coin-inner.is-rolling {
+  animation: id-coin-flip var(--flip-dur, 0.72s) cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+@keyframes id-coin-flip {
+  from { transform: rotateY(0deg); }
+  to { transform: rotateY(var(--flip-end, 720deg)); }
+}
+.id-coin-face {
+  position: absolute; inset: 0; border-radius: 50%;
+  backface-visibility: hidden;
+  border: 2px solid #c79a3a;
+  box-shadow: inset 0 0 7px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.55);
+}
+.id-coin-face.is-front {
+  background: radial-gradient(circle at 35% 30%, #f5d489, #d4a43c 45%, #9a6d1f 78%, #6b4a12);
+}
+.id-coin-face.is-back {
+  background: radial-gradient(circle at 35% 30%, #ffffff, #d7dce8 40%, #9aa3b5 75%, #6b7280);
+  transform: rotateY(180deg);
+  border-color: #b7bfce;
+  box-shadow: inset 0 0 7px rgba(0,0,0,0.35), 0 4px 12px rgba(0,0,0,0.45), 0 0 14px rgba(210,220,238,0.45);
+}
+.id-coin-hole {
+  position: absolute; left: 50%; top: 50%;
+  width: 16px; height: 16px; border-radius: 3px;
+  transform: translate(-50%, -50%);
+  background: var(--phone-bg); border: 1px solid rgba(0,0,0,0.55);
+  z-index: 2;
+}
+
+/* 成卦结果 */
+.id-divine-result {
+  min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.25rem;
+}
+.id-divine-result-gua {
+  font-family: var(--font-display); font-size: 1.6rem; font-weight: 700;
+  color: var(--amber); letter-spacing: 0.12em;
+  text-shadow: 0 0 20px rgba(232,168,56,0.7);
+  animation: id-gua-glow 1.6s ease infinite alternate;
+}
+@keyframes id-gua-glow {
+  from { text-shadow: 0 0 10px rgba(232,168,56,0.4); }
+  to { text-shadow: 0 0 28px rgba(232,168,56,0.9); }
+}
+.id-divine-result-sub { font-size: 0.72rem; color: var(--text-mute); letter-spacing: 0.05em; }
+.id-divine-result-name { font-size: 0.85rem; color: var(--text-dim); }
+.id-divine-result-name.is-err { color: var(--ember); }
+
+/* 操作 */
+.id-divine-actions { display: flex; gap: 0.6rem; width: 100%; margin-top: 0.3rem; }
+.id-divine-btn {
+  flex: 1; padding: 0.68rem; border: none; border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #d4a43c, #b98a2f); color: #2a1c04;
+  font-size: 0.88rem; font-weight: 700; cursor: pointer; letter-spacing: 0.08em;
+}
+.id-divine-btn:disabled { opacity: 0.45; cursor: default; }
+.id-divine-btn.is-alt { background: transparent; border: 1px solid var(--amber-dim); color: var(--amber); }
+.id-divine-cancel {
+  margin-top: 0.7rem; background: none; border: none; color: var(--text-mute);
+  font-size: 0.76rem; cursor: pointer;
+}
+
+/* ===== 首页中间区域：左右两个方形（头像 + 卦象）等高并排（grid 严格等分） ===== */
+.id-desktop-center {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin: 0.55rem 0 0.9rem;
+  align-items: stretch;
+}
+
+/* 好友条：方形横滑（头像铺满作背景 + 底部文字蒙版），占一半宽 */
+.id-friend-rail {
+  aspect-ratio: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.id-friend-rail::-webkit-scrollbar { display: none; }
+
+.id-friend-card {
+  position: relative;
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--card-bg-strong);
+  border: 1px solid var(--glass-edge);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  display: block;
+}
+.id-friend-empty { cursor: default; }
+
+/* 头像图片铺满整块方形作背景 */
+.id-friend-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.id-friend-bg-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  color: var(--accent);
+  background: var(--panel-2);
+}
+
+/* 文字蒙版：底部渐变，保证图片上的名字/行程能看清 */
+.id-friend-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.6rem 0.45rem 0.35rem;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.72));
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.id-friend-name {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.id-friend-schedule {
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.85);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  min-height: 0.85rem;
+}
+.id-friend-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #7a8194;
+  border: 2px solid rgba(255,255,255,0.65);
+}
+.id-friend-dot.is-online { background: #4ade80; }
+
+/* 卦象卡：方形（与头像等高，占一半宽） */
+.id-div-card {
+  position: relative;
+  flex: 1 1 0;
+  aspect-ratio: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.12rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--card-bg-strong);
+  border: 1px solid var(--glass-edge);
+  border-radius: 14px;
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15);
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+}
+
+/* 桌面（≥600px）：卦象卡内容恢复饱满 */
+@media (min-width: 600px) {
+  .id-friend-name { font-size: 0.85rem; }
+  .id-div-card { gap: 0.3rem; padding: 0.6rem 0.5rem; }
+}
+.id-div-card.is-ready { border-color: rgba(232,168,56,0.45); }
+.id-div-card.is-err { border-color: rgba(240,110,110,0.55); }
+
+.id-div-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  justify-content: center;
+}
+.id-div-card-title {
+  font-size: 0.68rem;
+  color: var(--text-mute);
+  letter-spacing: 0.12em;
+}
+.id-div-card-sub {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: 0.08em;
+}
+
+.id-div-card-hex { width: 100%; display: flex; justify-content: center; }
+.id-div-card .id-divine-yaos { gap: 0.5rem; }
+.id-div-card .id-yao-bar { width: 120px; height: 16px; }
+.id-div-card .id-yao-bar.is-yang .id-yao-seg { width: 120px; }
+.id-div-card .id-yao-bar.is-yin .id-yao-seg { width: 55px; }
+.id-div-card .id-yao-seg { height: 12px; border-radius: 6px; }
+
+/* 半透明占位爻（未成卦时的抛硬币背景） */
+.id-yao-bar.is-pending { opacity: 0.2; }
+.id-yao-bar.is-pending .id-yao-seg {
+  background: linear-gradient(90deg, transparent, #f0c96a, transparent);
+  box-shadow: none;
+}
+
+.id-div-card-coins {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: center;
+  margin: 0.1rem 0;
+  perspective: 700px;
+}
+.id-div-card .id-coin-sm { width: 44px; height: 44px; }
+.id-div-card .id-coin-sm .id-coin-hole { width: 12px; height: 12px; }
+.id-coin-sm .id-coin-face { border-width: 1.5px; }
+
+.id-div-card-hint {
+  font-size: 0.6rem;
+  color: var(--text-mute);
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+/* 桌面：卦象卡子元素恢复饱满（置于文件末尾，覆盖前文手机紧凑样式） */
+@media (min-width: 600px) {
+  .id-div-card .id-divine-yaos { gap: 0.625rem; }
+  .id-div-card .id-yao-bar { width: 190px; height: 20px; }
+  .id-div-card .id-yao-bar.is-yang .id-yao-seg { width: 190px; }
+  .id-div-card .id-yao-bar.is-yin .id-yao-seg { width: 90px; }
+  .id-div-card .id-yao-seg { height: 16px; border-radius: 8px; }
+  .id-div-card .id-coin-sm { width: 56px; height: 56px; }
+  .id-div-card .id-coin-sm .id-coin-hole { width: 15px; height: 15px; }
+  .id-div-card-sub { font-size: 1rem; }
+  .id-div-card-hint { font-size: 0.68rem; }
+}
+.id-div-card.is-ready .id-div-card-hint { color: var(--amber); }
+.id-div-card.is-err .id-div-card-hint { color: #f06e6e; }
+
+/* 未成卦：六爻整体半透明当背景，突出硬币 */
+.id-divine-yaos.is-pending { opacity: 0.3; }
+
+/* 成卦后：动爻标记放大 */
+.id-div-card.is-cast .id-yao-dong-mark.is-yang { width: 0.85rem; height: 0.85rem; }
+.id-div-card.is-cast .id-yao-dong-mark.is-yin { width: 0.85rem; height: 0.85rem; }
+.id-div-card.is-cast .id-yao-dong-mark.is-yin::before,
+.id-div-card.is-cast .id-yao-dong-mark.is-yin::after { width: 1rem; height: 2px; }
+
+/* 未成卦：铜钱叠在爻上面（爻是半透明背景层，铜钱是前景层） */
+.id-div-card:not(.is-cast) .id-div-card-coins {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  z-index: 2;
+}

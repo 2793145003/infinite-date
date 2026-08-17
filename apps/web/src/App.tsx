@@ -82,6 +82,7 @@ export default function App() {
   const [unreadSms, setUnreadSms] = useState(0);
   const [unreadMoments, setUnreadMoments] = useState(0);
   const [unreadSuggestions, setUnreadSuggestions] = useState(0);
+  const [maintenance, setMaintenance] = useState(false);
 
   // view 变化时持久化到 sessionStorage（切屏/刷新后恢复）
   useEffect(() => {
@@ -104,6 +105,23 @@ export default function App() {
       }
     }
   }, []);
+
+  // 连接监测：定时 ping /api/health，后端失联时显示维护横幅，恢复后自动隐藏
+  useEffect(() => {
+    if (!player) return;
+    let alive = true;
+    const ping = async () => {
+      try {
+        const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
+        if (alive) setMaintenance(!res.ok);
+      } catch {
+        if (alive) setMaintenance(true);
+      }
+    };
+    ping();
+    const interval = setInterval(ping, 5000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [player]);
 
   useEffect(() => {
     // token 失效时回到登录页（401 触发）
@@ -355,6 +373,12 @@ export default function App() {
       onHome={goHome}
     >
       {renderScreen()}
+      {maintenance && (
+        <div className="id-maintenance-banner">
+          <span className="id-maintenance-dot" />
+          服务器维护中，正在自动重连…
+        </div>
+      )}
       <LiveConflictModal onNavigate={(v) => setView(v as View)} />
     </PhoneShell>
   );
