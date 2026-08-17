@@ -20,10 +20,7 @@ export const REPLY_SCHEMA = {
     internal: { type: 'string' },
     internal_notable: { type: 'boolean' },
     player_description: { type: 'string' },
-    item_obtained: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
     scene_concluded: { type: 'boolean' },
-    environment: { type: 'string' },
-    quest_npc_line: { type: 'string' },
     current_location: { type: 'string' },
     need_search: { type: 'boolean' },
     search_query: { type: 'string' },
@@ -46,6 +43,7 @@ export interface PromptContext {
   retrievedMemories?: string | null; // 向量检索命中的相关记忆（Phase 5）
   currentTime?: string; // 当前时间（日期+时段）
   relationshipDuration?: string; // 认识多久（"3天前初次相遇"等）
+  situationalNote?: string; // 情境注脚（可选，如"被吵醒"），追加在 system prompt 末尾
 }
 
 /**
@@ -130,12 +128,22 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // 叙事规则按场景只注入对应的一条
   const narrativeRules = ctx.isTextMessage
     ? '- 你正在发短信，玩家看不见你。绝对不要写动作描写、场景描写或舞台指示——没有（括号动作）、没有环境描述，只有纯文字消息。通过文字特征传达情绪：回复速度的快慢暗示、消息长短的变化、标点的有无、语气词的增减、打字习惯（如突然用句号表示冷淡）'
-    : '- 玩家能看见你。每条回复都要有身体语言——表情变化、肢体动作、与环境的互动、和玩家之间的物理距离感。用（括号）包裹动作描写，穿插在台词之间，不要全堆在开头或结尾。角色卡的emotional_signals是行为倾向参考，不要逐字照搬，每次根据当下情境变化细节';
+    : [
+        '- 玩家能看见你。每条回复都要有身体语言——表情变化、肢体动作、与环境的互动、和玩家之间的物理距离感。用（括号）包裹动作描写，穿插在台词之间，不要全堆在开头或结尾。角色卡的emotional_signals是行为倾向参考，不要逐字照搬，每次根据当下情境变化细节',
+        '- 情绪通过行为传达，不直接写心理陈述',
+        '- 动作描写省略主语，不写"我"——直接写动作本身（如"唇角微微抿出弧度"而非"我唇角微微抿出弧度"）',
+        '- 动作描写直接呈现状态，不要用"由于…而…"句式解释原因。写"指尖微微蜷缩"而非"由于放松而微微蜷缩"，写"肌肉紧绷"而非"由于过度紧绷而战栗"',
+      ].join('\n');
+
+  // 输出格式里 messages 字段的条数 + 动作描写说明，按场景区分（短信只有纯文字）
+  const messageRule = ctx.isTextMessage
+    ? '短信场景可发多条（逐条弹出），只有纯文字消息，绝对不要动作描写'
+    : '约会场景一般一条，动作描写用中文括号（）';
 
   // 组装地点文本：优先显示当前地点（移动后的），否则显示起始地点
   const locationText = ctx.currentLocationName || ctx.locationName || '';
 
-  return renderPrompt(tpl, {
+  const rendered = renderPrompt(tpl, {
     character_name: char.name,
     character_card: characterCard,
     player_description: ctx.playerDescription,
@@ -148,7 +156,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     current_time: ctx.currentTime ?? formatCurrentTime(),
     relationship_duration: ctx.relationshipDuration ?? '',
     narrative_rules: narrativeRules,
+    message_rule: messageRule,
   });
+  if (ctx.situationalNote) return rendered + '\n\n' + ctx.situationalNote;
+  return rendered;
 }
 
 /**
@@ -197,7 +208,7 @@ function _isEchoingPlayer(replyMessages: string[], playerInput: string): boolean
 
 export async function generateReply(
   messages: ChatMessage[],
-  opts?: { temperature?: number; maxTokens?: number },
+  opts?: { temperature?: number; maxTokens?: number; playerId?: string },
 ): Promise<LlmStructuredReply> {
   // 提取玩家最后一条消息用于复述检测
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
@@ -208,6 +219,7 @@ export async function generateReply(
     temperature: opts?.temperature ?? 0.8,
     maxTokens: opts?.maxTokens ?? 1024,
     guidedJson: REPLY_SCHEMA,
+    playerId: opts?.playerId,
   });
 
   const parsed = tryParseJsonReply(result.content);
@@ -223,6 +235,7 @@ export async function generateReply(
         temperature: 0.95,
         maxTokens: opts?.maxTokens ?? 1024,
         guidedJson: REPLY_SCHEMA,
+        playerId: opts?.playerId,
       });
       const echoParsed = tryParseJsonReply(echoRetry.content);
       if (echoParsed && typeof echoParsed.messages !== 'undefined') {
@@ -241,12 +254,13 @@ export async function generateReply(
     content: result.content,
   }, {
     role: 'user' as const,
-    content: '请用JSON格式回复，包含messages数组、internal、internal_notable、player_description、item_obtained、scene_concluded字段。',
+    content: '请用JSON格式回复，包含messages数组、internal、internal_notable、player_description、scene_concluded字段。',
   }];
   const retryResult = await chat(retryMessages, {
     temperature: 0.5,
     maxTokens: opts?.maxTokens ?? 1024,
     guidedJson: REPLY_SCHEMA,
+    playerId: opts?.playerId,
   });
   const retryParsed = tryParseJsonReply(retryResult.content);
   if (retryParsed && typeof retryParsed.messages !== 'undefined') {
@@ -266,10 +280,7 @@ export async function generateReply(
     internal: '',
     internal_notable: false,
     player_description: '',
-    item_obtained: null,
     scene_concluded: false,
-    environment: '',
-    quest_npc_line: '',
     current_location: '',
   };
 }
@@ -387,10 +398,7 @@ function normalizeReply(raw: Record<string, unknown>): LlmStructuredReply {
     internal: cleanMessageText(String(raw.internal ?? '')),
     internal_notable: Boolean(raw.internal_notable),
     player_description: String(raw.player_description ?? ''),
-    item_obtained: raw.item_obtained == null ? null : Boolean(raw.item_obtained),
     scene_concluded: Boolean(raw.scene_concluded),
-    environment: raw.environment ? cleanMessageText(String(raw.environment)) : '',
-    quest_npc_line: raw.quest_npc_line ? cleanMessageText(String(raw.quest_npc_line)) : '',
     current_location: raw.current_location ? String(raw.current_location).trim() : '',
     need_search: Boolean(raw.need_search),
     search_query: raw.search_query ? String(raw.search_query).trim() : '',
@@ -517,20 +525,6 @@ function salvageMessagesFromText(raw: string): LlmStructuredReply | null {
     sceneConcluded = concludedMatch[1] === 'true';
   }
 
-  // 提取 environment
-  let environment = '';
-  const envMatch = raw.match(/"environment"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (envMatch?.[1]) {
-    environment = cleanMessageText(envMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n'));
-  }
-
-  // 提取 quest_npc_line
-  let questNpcLine = '';
-  const questMatch = raw.match(/"quest_npc_line"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (questMatch?.[1]) {
-    questNpcLine = cleanMessageText(questMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n'));
-  }
-
   // 提取 current_location
   let currentLocation = '';
   const locMatch = raw.match(/"current_location"\s*:\s*"((?:[^"\\]|\\.)*)"/);
@@ -544,109 +538,12 @@ function salvageMessagesFromText(raw: string): LlmStructuredReply | null {
       internal,
       internal_notable: internalNotable,
       player_description: playerDescription,
-      item_obtained: null,
       scene_concluded: sceneConcluded,
-      environment,
-      quest_npc_line: questNpcLine,
       current_location: currentLocation,
     };
   }
 
   return null;
-}
-
-// ─── 任务模式辅助 ────────────────────────────────────────────
-
-/**
- * 构建任务模式的 worldContext — 在世界设定基础上追加任务推进指令。
- *
- * 核心问题：原来只注入世界设定文本，NPC没有推进剧情的动力，
- * 导致任务对象（执念持有者）迟迟不出现，NPC闲聊几句就想收束。
- *
- * 解法：根据对话轮数推断当前任务阶段，给NPC明确的叙事指令。
- */
-export function buildMissionWorldContext(
-  world: { name: string; summary: string; tone: string; rules: string; lore: string },
-  meta: { item: string; obsession: string; briefing: string;
-    landmarks?: { name: string; feature: string }[];
-    minor_characters?: { name: string; trait: string }[];
-    world_tension?: string; mission_hook?: string; twist_seed?: string;
-  },
-  turnCount: number,
-  recentQuestLines?: string[],
-): string {
-  // 根据对话轮数推断任务阶段
-  let phase: string;
-  if (turnCount <= 2) {
-    phase = `【当前阶段：初入世界】
-你们刚抵达不久，正在探索 surroundings。不要急于找到目标物品——先让玩家感受到这个世界的氛围。
-但这不意味着漫无目的：你们应该遇到这个世界的人或事，自然地获取关于"${meta.item}"和执念持有者的线索。
-不要停下来等玩家推动——你主动发现路径、提出方向、注意到环境中的异常。`;
-  } else if (turnCount <= 6) {
-    phase = `【当前阶段：接近执念持有者】
-你们已经探索了一阵，应该开始接触执念持有者了。
-执念持有者信息：${meta.obsession}
-不要让玩家一个人去找——你作为同伴要主动参与：提出建议、注意到玩家没注意的细节、甚至主动和执念持有者搭话。
-执念持有者不会主动来找你们——你们需要去找到他们。推动剧情往这个方向走。
-一旦找到执念持有者，让他通过quest_npc_line开口说话——他可能有反应、有情绪、有抗拒，但不会沉默。`;
-  } else if (turnCount <= 12) {
-    phase = `【当前阶段：与执念持有者交涉】
-你们应该已经找到执念持有者了，正在进行交涉。
-执念持有者不是反派——他们有感情，有舍不得的理由。任务不是抢走物品，是帮人释怀。
-推进交涉：可能出现僵局、可能需要了解执念持有者的故事、可能需要玩家做出选择。
-你不要替玩家做决定，但你要积极参与——提出看法、质疑、或支持玩家的选择。
-执念持有者要主动说话——通过quest_npc_line表达他的情绪、回忆、抗拒或动摇。不要让他当背景板，每轮都应该有他的声音。`;
-  } else {
-    phase = `【当前阶段：推进收束】
-任务已经进行了很久，应该推向结局了。
-如果物品已经到手：可以自然收束，scene_concluded可以为true。
-如果物品还没到手：不要继续拖延——制造一个转折或机会，让任务有突破性进展。可以是你发现了关键信息、执念持有者态度松动、或者出现新的转机。
-不要让任务陷入无意义的循环对话。`;
-  }
-
-  const result = `【任务世界】
-世界：${world.name}
-环境：${world.summary}
-氛围：${world.tone}
-${world.rules ? `规则：${world.rules}\n` : ''}背景：${world.lore}
-任务目标：回收"${meta.item}"
-执念背景：${meta.obsession}
-${meta.world_tension ? `\n世界现状：${meta.world_tension}` : ''}
-${meta.landmarks?.length ? `\n世界地标（可在对话中提及或前往）：\n${meta.landmarks.map(l => `· ${l.name}：${l.feature}`).join('\n')}` : ''}
-${meta.minor_characters?.length ? `\n世界居民（探索时可能偶遇）：\n${meta.minor_characters.map(c => `· ${c.name}：${c.trait}`).join('\n')}` : ''}
-${meta.twist_seed ? `\n转折伏笔（在合适时机自然引出，不要急于揭露）：${meta.twist_seed}` : ''}
-
-${phase}
-
-${recentQuestLines?.length ? `【执念持有者最近台词】\n以下是执念持有者最近说过的话（从旧到新），避免重复，确保情绪推进：\n${recentQuestLines.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n` : ''}
-【任务行为准则】
-- 你是任务的同行者，不是旁观者。主动推进探索、发现线索、和NPC互动，不要等玩家一个人推动所有剧情
-- 执念持有者需要你们去找到——他们不会自己出现。在合适的时机让他们登场
-- 每条回复都要推进剧情——不要原地踏步、重复已说过的话、或用闲聊填充回合
-- 不要轻易收束场景（scene_concluded）。任务还在进行中，你们还有事要做。只有在物品到手后才能收束
-- 回复中可以包含environment字段描写环境变化（如新场景出现、天气变化、发现新事物），留空则不产生旁白。不是每轮都需要旁白，但在场景转换或发现新事物时应该用environment描写
-- 执念持有者登场后，通过quest_npc_line输出他的台词。他有自己的情感和意志——会主动开口、会反应、会抗拒。不要让他沉默当背景板。如果本轮执念持有者不在场或不适合说话，留空
-- 注意：quest_npc_line是执念持有者说的话，不是你的台词。你在messages里说自己作为同伴的话，执念持有者的话放在quest_npc_line里。两个角色不能混淆
-- 执念持有者每轮的情绪必须有推进——不能重复之前表达过的情绪或台词。他不是复读机，他在经历一段心路历程：抗拒→动摇→回忆→挣扎→释怀。每轮都要往前走一步，哪怕是微小的变化
-- 利用世界地标和世界居民丰富探索过程——不要只盯着执念持有者，在去找他的路上也可以有偶遇和发现，让世界有生活感
-
-【关于对话流中的执念持有者台词】
-对话历史中以"[执念持有者]："开头的消息是执念持有者说的，不是玩家说的，也不是你说的。
-你需要在messages里回应执念持有者的话，通过quest_npc_line输出执念持有者新一轮的台词。
-两个角色不能混淆：messages是你的台词，quest_npc_line是执念持有者的台词。
-执念持有者每轮的情绪必须有推进——不能重复之前表达过的情绪或台词。他不是复读机，他在经历一段心路历程：抗拒→动摇→回忆→挣扎→释怀。每轮都要往前走一步，哪怕是微小的变化`;
-  return result;
-}
-
-/**
- * 任务模式下对LLM回复做后处理：
- * - 物品未到手时强制scene_concluded=false（防止NPC提前收束）
- */
-export function applyMissionRules(reply: LlmStructuredReply, itemObtained: boolean): LlmStructuredReply {
-  if (!itemObtained && reply.scene_concluded) {
-    return { ...reply, scene_concluded: false };
-  }
-  return reply;
 }
 
 // ─── 群聊模式 ─────────────────────────────────────────────────
@@ -765,12 +662,13 @@ export function buildGroupMessages(
 export async function generateGroupReply(
   messages: ChatMessage[],
   charNames: string[],
-  opts?: { temperature?: number; maxTokens?: number },
+  opts?: { temperature?: number; maxTokens?: number; playerId?: string },
 ): Promise<GroupLlmReply> {
   const result = await chat(messages, {
     temperature: opts?.temperature ?? 0.85,
     maxTokens: opts?.maxTokens ?? 1024,
     guidedJson: GROUP_REPLY_SCHEMA,
+    playerId: opts?.playerId,
   });
 
   const parsed = tryParseJsonReply(result.content);
@@ -791,6 +689,7 @@ export async function generateGroupReply(
     temperature: 0.5,
     maxTokens: opts?.maxTokens ?? 1024,
     guidedJson: GROUP_REPLY_SCHEMA,
+    playerId: opts?.playerId,
   });
   const retryParsed = tryParseJsonReply(retryResult.content);
   if (retryParsed && Array.isArray(retryParsed.messages)) {
