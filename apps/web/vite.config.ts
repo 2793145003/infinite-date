@@ -16,6 +16,25 @@ export default defineConfig({
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
+      // dsh Web UI —— 认证反代监听 127.0.0.1:3090，它再转发到 dsh:3080。
+      // '/dsh/api'、'/dsh/plugins' 保留前缀（dsh 后端已按 /dsh/… 注册路由）；
+      // 其余 '/dsh/*'（静态资源）剥前缀，走 dsh 的 dist 根。
+      '/dsh/api': {
+        target: 'http://127.0.0.1:3090',
+        changeOrigin: true,
+        ws: true,
+      },
+      '/dsh/plugins': {
+        target: 'http://127.0.0.1:3090',
+        changeOrigin: true,
+        ws: true,
+      },
+      '/dsh': {
+        target: 'http://127.0.0.1:3090',
+        changeOrigin: true,
+        ws: true,
+        rewrite: (path) => path.replace(/^\/dsh/, ''),
+      },
     },
   },
   resolve: {
