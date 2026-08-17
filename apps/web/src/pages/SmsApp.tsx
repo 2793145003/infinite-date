@@ -102,6 +102,9 @@ export function SmsApp({
                     ) : (
                       t.character_id === 'DEITY' ? '⚡' : (t.character_name?.[0] ?? '?')
                     )}
+                    {t.character_id !== 'DEITY' && (
+                      <span className={`id-thread-presence-dot ${t.online_state === 'online' ? 'online' : 'offline'}`} />
+                    )}
                   </div>
                   <div className="id-thread-info">
                     <div className="id-thread-name">{t.character_name || '未知'}</div>
@@ -143,6 +146,7 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
   const [invite, setInvite] = useState<SmsInvite | null>(null);
   const [acceptingInvite, setAcceptingInvite] = useState(false);
   const [quotingMsg, setQuotingMsg] = useState<{ id: string; text: string; senderName: string } | null>(null);
+  const [onlineState, setOnlineState] = useState<'online' | 'sleep' | 'mission'>('online');
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -211,6 +215,7 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
       setMessages(data.messages);
       setNpcName(data.thread.character_name || '短信');
       setNpcAvatar(data.thread.avatar || null);
+      setOnlineState(data.thread.online_state ?? 'online');
       // 等DOM渲染完直接跳到底部
       requestAnimationFrame(() => {
         if (scrollRef.current) {
@@ -378,6 +383,47 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
     }
   };
 
+  const handleRetryDreamSms = async () => {
+    if (retrying || sending) return;
+    setRetrying(true);
+    try {
+      // 本地只删末尾连续的 dream 气泡（与后端一致）
+      setMessages(prev => {
+        const out = [...prev];
+        while (out.length > 0) {
+          const last = out[out.length - 1]!;
+          if (last.sender !== 'npc') break;
+          let isDreamMsg = false;
+          try { isDreamMsg = !!(last.metadata && JSON.parse(last.metadata).dream); } catch { /* ignore */ }
+          if (!isDreamMsg) break;
+          out.pop();
+        }
+        return out;
+      });
+      const data = await api.retryDreamSms(threadId);
+      // 新梦短信逐条显示
+      for (let i = 0; i < data.npcMessages.length; i++) {
+        const npc = data.npcMessages[i]!;
+        await sleep(800 + Math.min(npc.text.length * 25, 1200));
+        setMessages(prev => [...prev, {
+          id: npc.id, sender: 'npc' as const, body: npc.text, status: 'delivered',
+          image_asset_id: null,
+          metadata: '{"proactive":true,"dream":true}',
+          internal: i === 0 ? npc.internal : '',
+          internal_notable: (i === 0 && npc.internal_notable) ? 1 : 0,
+          internal_viewed: 0,
+          created_at: Date.now() + i + 1, delivered_at: Date.now() + i + 1,
+        }]);
+        await sleep(300);
+      }
+    } catch (err) {
+      alert((err as Error).message);
+      loadMessages();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const handleRegenerateGreeting = async () => {
     if (regeneratingGreeting || sending) return;
     setRegeneratingGreeting(true);
@@ -524,6 +570,10 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
         )}
       </div>
 
+      {onlineState === 'sleep' && !isDeity && (
+        <div className="id-thread-status-banner">💤 对方正在休息，可能没那么快回复</div>
+      )}
+
       {isDeity && (
         <div className="id-deity-shortcuts">
           <button className="id-deity-shortcut-btn" onClick={handleStartCreation} disabled={!!creationSession}>召唤NPC</button>
@@ -556,6 +606,14 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
                 <div className="id-card-row">
                   <label>名字</label>
                   <input value={creationDraft.name ?? ''} onChange={e => setCreationDraft({...creationDraft, name: e.target.value})} />
+                </div>
+                <div className="id-card-row">
+                  <label>性别</label>
+                  <select value={creationDraft.gender ?? ''} onChange={e => setCreationDraft({...creationDraft, gender: e.target.value})}>
+                    <option value="">未设定</option>
+                    <option value="male">男</option>
+                    <option value="female">女</option>
+                  </select>
                 </div>
                 <div className="id-card-row">
                   <label>年龄</label>
@@ -726,6 +784,10 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
             const isLastPlayer = msg.sender === 'player' && !messages.slice(i + 1).some(m => m.sender === 'player');
             const isLastNpc = msg.sender === 'npc' && !messages.slice(i + 1).some(m => m.sender === 'npc');
             const hasPlayerMessages = messages.some(m => m.sender === 'player');
+            let isDream = false;
+            if (msg.sender === 'npc' && msg.metadata) {
+              try { isDream = !!JSON.parse(msg.metadata).dream; } catch { /* ignore */ }
+            }
             const prevMsg = i > 0 ? messages[i - 1] : null;
             const showTime = !prevMsg || (msg.created_at - prevMsg.created_at > 5 * 60 * 1000);
             return (
@@ -774,7 +836,7 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
                     引用
                   </button>
                   {isLastNpc && !sending && !retrying && !undoing && !regeneratingGreeting && (
-                    <button className="id-bubble-action-btn" onClick={hasPlayerMessages ? handleRetrySms : handleRegenerateGreeting} disabled={retrying || regeneratingGreeting}>
+                    <button className="id-bubble-action-btn" onClick={isDream ? handleRetryDreamSms : (hasPlayerMessages ? handleRetrySms : handleRegenerateGreeting)} disabled={retrying || regeneratingGreeting}>
                       重试
                     </button>
                   )}

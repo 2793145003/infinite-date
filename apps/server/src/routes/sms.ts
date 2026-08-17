@@ -15,7 +15,7 @@ import { isCreationKeyword } from './creation';
 import { spendPlayerPermission } from '../lib/permission';
 import { getCosts } from '../lib/permission-config';
 import { loadCharacterData, getCharacterName, getCharacterAvatar } from '../lib/character';
-import { getCurrentSchedule, getNpcCurrentLocationName, getNpcInviteLocationId } from '../lib/schedule';
+import { getCurrentSchedule, getNpcCurrentLocationName, getNpcInviteLocationId, getNpcOnlineState } from '../lib/schedule';
 import { undoLastPlayerMessage, findLastPlayerForRetry, saveNpcReply, updatePlayerDescription, maybeRetrieveSearchResults, resolveQuote, formatQuotePrefix } from '../lib/conversation-helpers';
 
 export async function smsRoutes(app: FastifyInstance): Promise<void> {
@@ -44,10 +44,15 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     const result = threads.map(t => {
       let name = '主神';
       let avatar = null;
+      let onlineState = 'online';
 
       if (t.character_id !== DEITY_ID) {
         name = getCharacterName(t.character_id);
         avatar = getCharacterAvatar(playerId, t.character_id) || null;
+        const charData = loadCharacterData(playerId, t.character_id);
+        if (charData) {
+          onlineState = getNpcOnlineState(playerId, t.character_id, charData as unknown as Record<string, any>, now());
+        }
       }
 
       const lastMsg = db.prepare(`
@@ -60,6 +65,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
         avatar,
         last_message: lastMsg?.body ?? '',
         last_sender: lastMsg?.sender ?? '',
+        online_state: onlineState,
       };
     });
 
@@ -91,11 +97,20 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     // 标记已读
     db.prepare('UPDATE message_threads SET unread_count = 0 WHERE id = ?').run(threadId);
 
+    let onlineState = 'online';
+    if (thread.character_id !== DEITY_ID) {
+      const charData = loadCharacterData(playerId, thread.character_id);
+      if (charData) {
+        onlineState = getNpcOnlineState(playerId, thread.character_id, charData as unknown as Record<string, any>, now());
+      }
+    }
+
     const threadInfo = {
       id: thread.id,
       character_id: thread.character_id,
       character_name: thread.character_id === DEITY_ID ? '主神' : getCharacterName(thread.character_id),
       avatar: thread.character_id === DEITY_ID ? null : (getCharacterAvatar(playerId, thread.character_id) || null),
+      online_state: onlineState,
     };
 
     return reply.send({ thread: threadInfo, messages });
@@ -209,6 +224,14 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
     };
 
+    // 在线状态：NPC 正在睡觉 → 注入被吵醒注脚（任务中收不到 = mission 态，等 NPC 任务做完再补）
+    if (!isDeity && characterData) {
+      const onlineState = getNpcOnlineState(playerId, thread.character_id, characterData as unknown as Record<string, any>, now());
+      if (onlineState === 'sleep') {
+        ctx.situationalNote = '【此刻状态】你刚刚在睡觉，被这条短信吵醒了。你带着刚醒来的状态回复这条消息——刚醒的感觉自然流露在语气里，具体是什么样子由你的性格决定。';
+      }
+    }
+
     const systemPrompt = buildSystemPrompt(ctx);
     const messages = buildMessages(systemPrompt, ctx.recentMessages, quotePrefix + textBody);
 
@@ -218,7 +241,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
       // 存NPC回复
       const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
@@ -274,15 +297,29 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     const thread = db.prepare('SELECT id FROM message_threads WHERE id = ? AND player_id = ?').get(threadId, playerId);
     if (!thread) return reply.code(404).send({ error: '线程不存在' });
 
-    // 消耗权限
-    const undoCost = getCosts().undo_message;
-    const spendResult = spendPlayerPermission(playerId, undoCost, 'undo_sms');
-    if (!spendResult.ok) {
-      return reply.code(403).send({ error: `权限不足（需要${undoCost}）` });
-    }
+    // 先删后扣 + 包事务：任一步失败 ROLLBACK，不产生"白扣费"（修复先扣费后校验的 bug）
+    db.exec('BEGIN');
+    try {
+      const undoResult = undoLastPlayerMessage({ table: 'text_messages', idColumn: 'thread_id', idValue: threadId, playerRole: 'player', roleColumn: 'sender' });
+      if (!undoResult.ok) {
+        db.exec('ROLLBACK');
+        return reply.code(undoResult.code).send({ error: undoResult.error });
+      }
 
-    const undoResult = undoLastPlayerMessage({ table: 'text_messages', idColumn: 'thread_id', idValue: threadId, playerRole: 'player', roleColumn: 'sender' });
-    if (!undoResult.ok) return reply.code(undoResult.code).send({ error: undoResult.error });
+      // 删除已确认成功，此时才扣费；余额不足则回滚删除
+      const undoCost = getCosts().undo_message;
+      const spendResult = spendPlayerPermission(playerId, undoCost, 'undo_sms');
+      if (!spendResult.ok) {
+        db.exec('ROLLBACK');
+        return reply.code(403).send({ error: `权限不足（需要${undoCost}）` });
+      }
+
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* 事务可能已不在 */ }
+      app.log.error({ err }, '短信撤回失败');
+      return reply.code(500).send({ error: '撤回失败，请重试' });
+    }
 
     return reply.send({ ok: true });
   });
@@ -375,11 +412,19 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
     };
 
+    // 在线状态：NPC 正在睡觉 → 注入被吵醒注脚（任务中收不到 = mission 态，等 NPC 任务做完再补）
+    if (!isDeity && characterData) {
+      const onlineState = getNpcOnlineState(playerId, thread.character_id, characterData as unknown as Record<string, any>, now());
+      if (onlineState === 'sleep') {
+        ctx.situationalNote = '【此刻状态】你刚刚在睡觉，被这条短信吵醒了。你带着刚醒来的状态回复这条消息——刚醒的感觉自然流露在语气里，具体是什么样子由你的性格决定。';
+      }
+    }
+
     const systemPrompt = buildSystemPrompt(ctx);
     const messages = buildMessages(systemPrompt, ctx.recentMessages, quotePrefix + textBody);
 
     try {
-      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
       const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
       const npcMsgIds = npcSave.msgIds;
@@ -416,6 +461,82 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       app.log.error({ err }, 'LLM生成失败');
       return reply.code(502).send({ error: 'NPC回复生成失败，请稍后重试' });
+    }
+  });
+
+  // ─── 梦短信重试：删末尾连续 dream 气泡 → 用梦的 context 重新生成 ───
+  app.post('/sms/threads/:threadId/retry-dream', async (req, reply) => {
+    const playerId = requireAuth(req, reply);
+    if (!playerId) return;
+    const { threadId } = req.params as { threadId: string };
+
+    const thread = db.prepare('SELECT id, character_id FROM message_threads WHERE id = ? AND player_id = ?').get(threadId, playerId) as { id: string; character_id: string } | undefined;
+    if (!thread) return reply.code(404).send({ error: '线程不存在' });
+
+    // 从末尾往前，收集连续的 dream 气泡（停在与玩家消息或普通 NPC 消息交界处）
+    const recent = db.prepare(
+      `SELECT id, sender, metadata FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 30`
+    ).all(threadId) as Array<{ id: string; sender: string; metadata: string | null }>;
+
+    const dreamIds: string[] = [];
+    let sceneSessionId: string | null = null;
+    for (const m of recent) {
+      if (m.sender !== 'npc') break;
+      const meta = m.metadata ? jsonParse<Record<string, unknown>>(m.metadata, {}) : {};
+      if (!meta.dream) break;
+      dreamIds.push(m.id);
+      if (!sceneSessionId && typeof meta.scene_session_id === 'string') sceneSessionId = meta.scene_session_id;
+    }
+    if (dreamIds.length === 0) return reply.code(400).send({ error: '没有可重试的梦短信' });
+
+    // 回退：存量梦短信没有 scene_session_id，按该角色最近一次 dream_scenario 找
+    if (!sceneSessionId) {
+      sceneSessionId = (db.prepare(
+        `SELECT session_id FROM chronicles WHERE character_id = ? AND source = 'dream_scenario' ORDER BY created_at DESC LIMIT 1`
+      ).get(thread.character_id) as { session_id: string } | undefined)?.session_id ?? null;
+    }
+    if (!sceneSessionId) return reply.code(400).send({ error: '找不到对应的梦，无法重试' });
+
+    // 用梦的 context 生成新的梦短信（先生成，失败不丢旧数据）
+    const { buildDreamSmsMessages } = await import('../lib/scene-wiring');
+    const dreamMessages = await buildDreamSmsMessages(sceneSessionId, playerId, thread.character_id);
+    if (!dreamMessages) return reply.code(502).send({ error: '梦短信生成失败' });
+
+    try {
+      const reply_data = await generateReply(dreamMessages, { temperature: 0.9, maxTokens: 768, playerId });
+
+      // 删旧 dream 气泡
+      for (const id of dreamIds) {
+        db.prepare('DELETE FROM text_messages WHERE id = ?').run(id);
+      }
+
+      // 插新 dream 气泡
+      const msgIds: string[] = [];
+      const ts = now();
+      for (let i = 0; i < reply_data.messages.length; i++) {
+        const msg = reply_data.messages[i]!;
+        const msgId = genId();
+        const internal = i === 0 ? reply_data.internal : '';
+        const internalNotable = i === 0 && reply_data.internal_notable ? 1 : 0;
+        db.prepare(
+          `INSERT INTO text_messages (id, thread_id, sender, body, status, internal, internal_notable, internal_viewed, created_at, delivered_at, metadata) VALUES (?, ?, 'npc', ?, 'delivered', ?, ?, 0, ?, ?, ?)`
+        ).run(msgId, threadId, msg, internal, internalNotable, ts, ts, `{"proactive":true,"dream":true,"scene_session_id":"${sceneSessionId}"}`);
+        msgIds.push(msgId);
+      }
+      db.prepare('UPDATE message_threads SET last_message_at = ?, unread_count = unread_count + ?, updated_at = ? WHERE id = ?').run(ts, reply_data.messages.length, ts, threadId);
+
+      return reply.send({
+        npcMessages: reply_data.messages.map((msg, i) => ({
+          id: msgIds[i]!,
+          text: msg,
+          internal: i === 0 ? reply_data.internal : '',
+          internal_notable: i === 0 && reply_data.internal_notable,
+          internal_viewed: false,
+        })),
+      });
+    } catch (err) {
+      app.log.error({ err }, '梦短信重试失败');
+      return reply.code(502).send({ error: '梦短信生成失败，请稍后重试' });
     }
   });
 
@@ -530,7 +651,7 @@ ${dateContext.lastExchange}
   const messages = buildMessages(systemPrompt, [], greetingHint);
 
   try {
-    const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024 });
+    const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
     const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
 

@@ -133,6 +133,44 @@ function sleepWindowFor(playerId: string, characterId: string, ptype: Personalit
   return null;
 }
 
+// ─── 在线状态（短信可达性）────────────────────────────────
+
+export type NpcOnlineState = 'online' | 'sleep' | 'mission';
+
+/** 醒窗口：睡觉中被短信吵醒后"上线"的时长，超过则继续睡（15 分钟） */
+const AWAKE_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * NPC 在线状态——只描述"短信能不能即时到"，跟"人在哪/行程"是两个维度。
+ * - online：正常（含睡眠窗口内被吵醒后的半醒窗口）
+ * - sleep：当前在睡眠窗口、且距最近一条 NPC 回复已超过醒窗口 → 会被吵醒
+ * - mission：任务中收不到（待 NPC 任务做完补判定，先占位）
+ */
+export function getNpcOnlineState(
+  playerId: string,
+  characterId: string,
+  charData: Record<string, any>,
+  now: number,
+): NpcOnlineState {
+  // TODO(npc-task): mission 态——有进行中的 solo 任务时返回 'mission'
+  const ptype = classifyPersonality(charData);
+  const win = sleepWindowFor(playerId, characterId, ptype, charData, now);
+  if (!win) return 'online';
+
+  // 睡眠窗口内：距最近一条 NPC 回复 < 醒窗口 → 半醒（online），否则仍在睡（sleep）
+  const lastReply = db.prepare(`
+    SELECT tm.created_at
+    FROM text_messages tm
+    JOIN message_threads mt ON mt.id = tm.thread_id
+    WHERE mt.player_id = ? AND mt.character_id = ? AND tm.sender = 'npc'
+    ORDER BY tm.created_at DESC
+    LIMIT 1
+  `).get(playerId, characterId) as { created_at: number } | undefined;
+
+  if (lastReply && now - lastReply.created_at < AWAKE_WINDOW_MS) return 'online';
+  return 'sleep';
+}
+
 // ─── 北京日历日（行程落库的 day_key）────────────────────────
 // 北京时间 0 点作为一天起点；day_key 形如 "2026-08-05"。
 function bjDayStartMs(ms: number): number {
@@ -697,7 +735,7 @@ export function getNpcInviteLocationId(
   // 有进行中的约会（旧 conversation 或新 scene 约会）→ 不可邀请
   const activeSession = db.prepare('SELECT 1 FROM conversation_sessions WHERE player_id = ? AND ended = 0').get(playerId);
   if (activeSession) return null;
-  const activeScene = db.prepare('SELECT 1 FROM scene_sessions WHERE player_id = ? AND ended = 0').get(playerId);
+  const activeScene = db.prepare("SELECT 1 FROM scene_sessions WHERE player_id = ? AND ended = 0 AND scene_type = 'date'").get(playerId);
   if (activeScene) return null;
 
   // 有进行中的任务 → 不可邀请
