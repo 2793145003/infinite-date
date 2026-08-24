@@ -220,6 +220,12 @@ export const api = {
   cancelCreation: (sessionId: string) =>
     request<{ ok: boolean }>(`/creation/${sessionId}/cancel`, { method: 'POST' }),
 
+  importCharacter: (json: string, isPublic = true) =>
+    request<{ characterId: string; characterName: string }>(`/creation/import`, {
+      method: 'POST',
+      body: JSON.stringify({ json, isPublic }),
+    }),
+
   // 地图NPC
   getMapNpcs: () =>
     request<{ locations: Record<string, { characterId: string; name: string; avatarType?: 'image' | 'initial'; avatar: string; visibility: 'friend' | 'stranger' | 'unknown'; activity: string }[]> }>(`/map/npcs`),
@@ -321,6 +327,7 @@ export const api = {
       playerMessage: { id: string; text: string; imageAssetId: string | null };
       npcMessages: NpcReply[];
       invite?: SmsInvite;
+      delayed?: boolean;
     }>(`/sms/threads/${threadId}/send`, {
       method: 'POST',
       body: JSON.stringify({ text, imagePath, quoteId, quoteText, quoteSenderName }),
@@ -1159,6 +1166,9 @@ export interface ThreadInfo {
   character_id: string;
   character_name?: string;
   avatar?: string | null;
+  gender?: string | null;
+  age?: string | null;
+  appearance?: string | null;
   last_message?: string;
   last_sender?: string;
   unread_count: number;
@@ -1623,6 +1633,7 @@ export interface SceneLocationInfo {
   npcs: SceneNpcInfo[];
   isHome: boolean;
   background: string;
+  lotCount: number;
 }
 
 /** 场景对话里的一拍（一条消息） */

@@ -8,16 +8,20 @@ import type { View } from '../App';
 export function ArchivedApps({
   onBack,
   onNavigate,
+  embedded,
 }: {
   onBack: () => void;
   onNavigate: (view: View) => void;
+  embedded?: boolean;
 }) {
   return (
     <div className="id-app">
-      <div className="id-appbar">
-        <button className="id-appbar-back" onClick={onBack}>←</button>
-        <span className="id-appbar-title">已归档</span>
-      </div>
+      {!embedded && (
+        <div className="id-appbar">
+          <button className="id-appbar-back" onClick={onBack}>←</button>
+          <span className="id-appbar-title">已归档</span>
+        </div>
+      )}
       <div className="id-app-scroll">
         <div className="id-empty" style={{ padding: '1rem', flexDirection: 'row', justifyContent: 'center', gap: '0.5rem' }}>
           📦 这里存放已下线、但历史数据仍可查看的旧功能。

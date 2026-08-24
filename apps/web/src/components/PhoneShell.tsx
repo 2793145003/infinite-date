@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { FishMode } from '../pages/FishMode';
-import { getFishToggle } from '../lib/themes';
+import { getFishToggle, getHomeBg } from '../lib/themes';
 
 export function PhoneShell({
   children,
@@ -14,6 +14,7 @@ export function PhoneShell({
   onHome: () => void;
 }) {
   const [fishMode, setFishMode] = useState(false);
+  const [homeBg] = useState(getHomeBg);
   const toggleVisible = getFishToggle();
   const now = new Date();
   const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -55,7 +56,7 @@ export function PhoneShell({
             </div>
           </div>
         )}
-        <div className="id-screen">
+        <div className={`id-screen${homeBg.type !== 'none' ? ' has-home-bg' : ''}`}>
           {showFish ? <FishMode /> : children}
         </div>
         {!showFish && <button className="id-homebtn" onClick={onHome} aria-label="返回桌面" />}

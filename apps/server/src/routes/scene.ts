@@ -12,7 +12,7 @@ import { db } from '../db';
 import { requireAuth } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
 import { ensureSceneSession } from '../lib/scene-session';
-import { ensureSceneMap, getNpcs, upsertNpc, getLocationBackground, addBackgroundSubmission, getBackgroundSubmissions } from '../lib/scene-map';
+import { ensureSceneMap, getNpcs, upsertNpc, getLocationBackground, addBackgroundSubmission, getBackgroundSubmissions, parseSceneNpcs } from '../lib/scene-map';
 import { advanceScene, judgeMissionGoal } from '../lib/scene-wiring';
 import { rollbackScene } from '../lib/scene-rollback';
 import { getCharacterName, getCharacterAvatar, loadCharacterData, safeAvatar } from '../lib/character';
@@ -33,12 +33,6 @@ function sceneLocationPath(locationId: string, cache = new Map<string, string>()
   const path = parent ? `${parent} › ${row.name}` : row.name;
   cache.set(locationId, path);
   return path;
-}
-
-/** 计算某地点是否有子地点 */
-function sceneHasChildren(locationId: string): boolean {
-  const r = db.prepare('SELECT COUNT(*) as c FROM scene_locations WHERE parent_id = ? AND id NOT LIKE ?').get(locationId, 'temp-%') as { c: number };
-  return (r?.c ?? 0) > 0;
 }
 
 /** mission 场景推进后补 goal 判定（约会场景不判「任务完成」）；返回是否达成及原因。 */
@@ -84,7 +78,13 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
 
     // 每个角色：用 scene 行程生成确切位置
     const chars = db.prepare('SELECT id, character_data FROM characters').all() as { id: string; character_data: string }[];
+    // NPC 任务进行中（active 一起做 / solo 独自做且未到期）的角色不在主城（去了任务世界）
+    const inMissionChars = new Set((db.prepare(`
+      SELECT assignee_id FROM missions
+      WHERE quest_type = 'npc' AND (status = 'active' OR (status = 'solo' AND solo_complete_at > ?))
+    `).all(now) as { assignee_id: string }[]).map(m => m.assignee_id));
     for (const c of chars) {
+      if (inMissionChars.has(c.id)) continue; // 任务世界，不在主城
       let charData: Record<string, any>;
       try { const fork = db.prepare('SELECT character_data FROM character_player_data WHERE player_id = ? AND source_character_id = ?').get(playerId, c.id) as { character_data: string } | undefined; charData = JSON.parse(fork?.character_data ?? c.character_data); } catch { continue; }
 
@@ -148,7 +148,7 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
     if (!playerId) return;
     const { parentId } = req.query as { parentId?: string };
     const rows = db.prepare(
-      `SELECT id, name, summary, creator_type, creator_id, is_public, parent_id, home_of, npcs, background_image, created_at
+      `SELECT id, name, summary, creator_type, creator_id, is_public, parent_id, home_of, npcs, background_image, created_at, lot_count
        FROM scene_locations
        WHERE world_id = ?
          AND (is_public = 1 OR creator_id = ?)
@@ -156,6 +156,28 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
          AND (? IS NULL OR parent_id = ?)
        ORDER BY created_at`
     ).all(HUB_WORLD_ID, playerId, parentId ?? null, parentId ?? null) as any[];
+
+    // 内存索引：path 递归 / npcs 解析在本批 rows 内完成；hasChildren 只数「当前玩家可见」的子地点（避免公开地点挂私有子房间时外人下钻空视图），一次 GROUP BY 取全
+    const byId = new Map<string, any>(rows.map(r => [r.id, r]));
+    const childCount = new Map<string, number>();
+    const childRows = db.prepare(
+      `SELECT parent_id, COUNT(*) c FROM scene_locations
+       WHERE parent_id IS NOT NULL AND id NOT LIKE 'temp-%' AND (is_public = 1 OR creator_id = ?)
+       GROUP BY parent_id`
+    ).all(playerId) as { parent_id: string; c: number }[];
+    for (const r of childRows) childCount.set(r.parent_id, r.c);
+    // path 递归：优先内存；父地点不在本批（如 parentId 过滤时父未返回）回退 DB 单次查询
+    const pathCache = new Map<string, string>();
+    const pathOf = (id: string): string => {
+      if (pathCache.has(id)) return pathCache.get(id)!;
+      const row = byId.get(id);
+      if (!row) return sceneLocationPath(id);
+      const parent = row.parent_id && row.parent_id !== id ? pathOf(row.parent_id) : '';
+      const p = parent ? `${parent} › ${row.name}` : row.name;
+      pathCache.set(id, p);
+      return p;
+    };
+
     return reply.send({
       locations: rows.map(r => ({
         id: r.id,
@@ -165,11 +187,12 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
         creatorId: r.creator_id,
         isPublic: !!r.is_public,
         parentId: r.parent_id,
-        path: sceneLocationPath(r.id),
-        hasChildren: sceneHasChildren(r.id),
-        npcs: getNpcs(r.id),
+        path: pathOf(r.id),
+        hasChildren: (childCount.get(r.id) ?? 0) > 0,
+        npcs: parseSceneNpcs(r.npcs),
         isHome: !!r.home_of,
         background: (r.background_image as string | null)?.trim() ?? '',
+        lotCount: r.lot_count ?? 0,
       })),
     });
   });
@@ -184,6 +207,7 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
     if (summary && summary.length > 200) return reply.code(400).send({ error: '地点描述不能超过200字' });
 
     let validParentId: string | null = null;
+    let parentIsPublic: number | null = null;
     if (parentId) {
       const parent = db.prepare('SELECT id, is_public, creator_id FROM scene_locations WHERE id = ?').get(parentId) as
         { id: string; is_public: number; creator_id: string | null } | undefined;
@@ -192,9 +216,11 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(403).send({ error: '无法在别人的私有地点下创建' });
       }
       validParentId = parent.id;
+      parentIsPublic = parent.is_public;
     }
 
-    const isPub = isPublic !== false ? 1 : 0;
+    // 显式传 isPublic → 用显式值；未传 → 继承父级（父私有则私有，父公开/无父则公开）
+    const isPub = isPublic !== undefined ? (isPublic ? 1 : 0) : (parentIsPublic ?? 1);
     const locId = genId();
     const ts = now();
     db.prepare(

@@ -45,6 +45,9 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       let name = '主神';
       let avatar = null;
       let onlineState = 'online';
+      let gender: string | null = null;
+      let age: string | null = null;
+      let appearance: string | null = null;
 
       if (t.character_id !== DEITY_ID) {
         name = getCharacterName(t.character_id);
@@ -52,6 +55,9 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
         const charData = loadCharacterData(playerId, t.character_id);
         if (charData) {
           onlineState = getNpcOnlineState(playerId, t.character_id, charData as unknown as Record<string, any>, now());
+          gender = charData.gender ?? null;
+          age = charData.age ?? null;
+          appearance = charData.appearance ?? null;
         }
       }
 
@@ -63,6 +69,9 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
         ...t,
         character_name: name,
         avatar,
+        gender,
+        age,
+        appearance,
         last_message: lastMsg?.body ?? '',
         last_sender: lastMsg?.sender ?? '',
         online_state: onlineState,
@@ -224,11 +233,19 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
     };
 
-    // 在线状态：NPC 正在睡觉 → 注入被吵醒注脚（任务中收不到 = mission 态，等 NPC 任务做完再补）
+    // 在线状态：NPC 正在睡觉 → 注入被吵醒注脚；任务中（mission）→ 不即时回，等 solo 回归统一回应
     if (!isDeity && characterData) {
       const onlineState = getNpcOnlineState(playerId, thread.character_id, characterData as unknown as Record<string, any>, now());
       if (onlineState === 'sleep') {
         ctx.situationalNote = '【此刻状态】你刚刚在睡觉，被这条短信吵醒了。你带着刚醒来的状态回复这条消息——刚醒的感觉自然流露在语气里，具体是什么样子由你的性格决定。';
+      } else if (onlineState === 'mission') {
+        // 任务中收不到：玩家短信已落库，但不生成回复，等 solo 回归统一回应（顺序：道歉→回应→总结）
+        return reply.send({
+          playerMessage: { id: playerMsgId, text: textBody, imageAssetId: imagePath ?? null },
+          npcMessages: [],
+          invite: undefined,
+          delayed: true,
+        });
       }
     }
 
@@ -412,11 +429,18 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
     };
 
-    // 在线状态：NPC 正在睡觉 → 注入被吵醒注脚（任务中收不到 = mission 态，等 NPC 任务做完再补）
+    // 在线状态：NPC 正在睡觉 → 注入被吵醒注脚；任务中（mission）→ 不即时回，等 solo 回归统一回应
     if (!isDeity && characterData) {
       const onlineState = getNpcOnlineState(playerId, thread.character_id, characterData as unknown as Record<string, any>, now());
       if (onlineState === 'sleep') {
         ctx.situationalNote = '【此刻状态】你刚刚在睡觉，被这条短信吵醒了。你带着刚醒来的状态回复这条消息——刚醒的感觉自然流露在语气里，具体是什么样子由你的性格决定。';
+      } else if (onlineState === 'mission') {
+        // 任务中收不到：不生成回复，等 solo 回归统一回应（顺序：道歉→回应→总结）
+        return reply.send({
+          npcMessages: [],
+          invite: undefined,
+          delayed: true,
+        });
       }
     }
 

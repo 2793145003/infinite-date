@@ -367,8 +367,8 @@ export async function archiveRoutes(app: FastifyInstance): Promise<void> {
     const session = db.prepare(`
       SELECT ss.id, ss.scenario_id, ss.character_ids, ss.round_no, ss.goal_achieved,
              ss.dream_text, ss.dream_custom, ss.created_at, ss.updated_at,
-             ss.worldview, ss.player_role, ss.npc_role, ss.npc_roles, ss.goal, ss.opening_scene,
-             ss.greeting, ss.greetings, ss.ended,
+             ss.worldview, ss.player_role, ss.npc_roles, ss.goal, ss.opening_scene,
+             ss.ended,
              ss.stats_config, ss.stats_state,
              sc.title as scenario_title, sc.description as scenario_description
       FROM scene_sessions ss
@@ -377,8 +377,8 @@ export async function archiveRoutes(app: FastifyInstance): Promise<void> {
     `).get(sessionId, playerId) as {
       id: string; scenario_id: string; character_ids: string; round_no: number; goal_achieved: number;
       dream_text: string | null; dream_custom: number; created_at: number; updated_at: number;
-      worldview: string; player_role: string; npc_role: string; npc_roles: string; goal: string; opening_scene: string;
-      greeting: string; greetings: string; ended: number;
+      worldview: string; player_role: string; npc_roles: string; goal: string; opening_scene: string;
+      ended: number;
       stats_config: string; stats_state: string;
       scenario_title: string; scenario_description: string;
     } | undefined;
@@ -411,11 +411,8 @@ export async function archiveRoutes(app: FastifyInstance): Promise<void> {
         isGroup: charIds.length > 1,
         worldview: session.worldview ?? '',
         playerRole: session.player_role ?? '',
-        npcRole: session.npc_role ?? '',
         npcRoles: parseNpcRoles(session.npc_roles ?? '[]'),
         openingScene: session.opening_scene ?? '',
-        greeting: session.greeting ?? '',
-        greetings: jsonParse<string[]>(session.greetings ?? '[]', []),
         goal: session.goal ?? '',
         statsConfig: jsonParse(session.stats_config ?? '[]', []),
         statsState: jsonParse(session.stats_state ?? '{}', {}),

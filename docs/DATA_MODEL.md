@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS relationships (
   ⚡last_schedule_slot   INTEGER NOT NULL DEFAULT 0,     -- 行程变更检测（位置指纹）
   ⚡sms_urge             REAL NOT NULL DEFAULT 0,        -- 短信意愿累积（0~100，migration追加）
   ⚡moment_urge          REAL NOT NULL DEFAULT 0,        -- 朋友圈意愿累积（0~100，migration追加）
+  ⚡last_task_invite_day TEXT,                           -- NPC任务每日邀请上限（北京日 key，空=今天没发过）（migration追加）
   updated_at            INTEGER NOT NULL
 );
 -- COALESCE修复NULL不生效问题：副本隔离，NULL=默认副本
@@ -408,14 +409,15 @@ CREATE TABLE IF NOT EXISTS missions (
   world_id     TEXT REFERENCES worlds(id),
   title        TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',
-  status       TEXT NOT NULL DEFAULT 'available',  -- available/active/completed/declined
+  status       TEXT NOT NULL DEFAULT 'available',  -- available/active/solo/completed/declined
   reward       INTEGER NOT NULL DEFAULT 0,  -- 由 permission_costs.json 配置（mission_base_reward 等）
   evaluation_result TEXT,  -- JSON: 世界任务评级结果 {goal_achieved: bool, cooperation_quality: str, summary: str, stats_state: {...}, stats_config: [...]}
   rating_score INTEGER,  -- 世界任务评级得分（1-3），用于更新玩家rating_score
   ⚡metadata   TEXT NOT NULL DEFAULT '{}',  -- JSON: 结构化数据（世界设定/地标/世界NPC/困境数值/卦象档案等）（migration追加）
   created_at   INTEGER NOT NULL,
   started_at   INTEGER,
-  completed_at INTEGER
+  completed_at INTEGER,
+  ⚡solo_complete_at INTEGER  -- NPC任务玩家拒绝后 NPC 独自完成的时刻；接受分支为 NULL（migration追加）
 );
 CREATE INDEX IF NOT EXISTS idx_missions ON missions(player_id, status);
 ```
@@ -1167,6 +1169,7 @@ migration 版本管理通过 `schema_migrations` 表实现，每条 migration �
 | 2026-07 | 加 `last_schedule_slot INTEGER NOT NULL DEFAULT 0` 列（行程变更检测） | db/index.ts migration |
 | 2026-08 | 加 `sms_urge REAL NOT NULL DEFAULT 0` 列（短信意愿累积，替代 next_message_eligible_at） | db/index.ts migration `relationships_urge` |
 | 2026-08 | 加 `moment_urge REAL NOT NULL DEFAULT 0` 列（朋友圈意愿累积） | db/index.ts migration `relationships_urge_moment` |
+| 2026-08 | 加 `last_task_invite_day TEXT` 列（NPC任务每日邀请上限，北京日 key） | db/index.ts migration `relationships_last_task_invite` |
 
 ### players 表
 
@@ -1181,6 +1184,7 @@ migration 版本管理通过 `schema_migrations` 表实现，每条 migration �
 |------|------|----------|
 | 初始 | 建表 | schema.ts |
 | 2026-08 | 加 `metadata TEXT NOT NULL DEFAULT '{}'` 列（存储 item/obsession 等结构化数据） | db/index.ts migration |
+| 2026-08 | 加 `solo_complete_at INTEGER` 列（NPC任务玩家拒绝后独自完成时刻） | db/index.ts migration `missions_solo_complete_at` |
 
 ### text_messages 表
 

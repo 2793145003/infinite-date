@@ -37,7 +37,7 @@ function downloadMarkdown(md: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function ArchiveApp({ onBack }: { onBack: () => void }) {
+export function ArchiveApp({ onBack, embedded }: { onBack: () => void; embedded?: boolean }) {
   const [tab, setTab] = useState<Tab>('scene');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -215,14 +215,24 @@ export function ArchiveApp({ onBack }: { onBack: () => void }) {
 
     return (
       <div className="id-app">
-        <div className="id-appbar">
-          <button className="id-appbar-back" onClick={back}>←</button>
-          <span className="id-appbar-title">回忆</span>
-          <button className="id-appbar-action" disabled={exporting} onClick={() => handleExport(exportId)}>
-            {exporting ? '…' : '导出'}
-          </button>
-        </div>
+        {!embedded && (
+          <div className="id-appbar">
+            <button className="id-appbar-back" onClick={back}>←</button>
+            <span className="id-appbar-title">回忆</span>
+            <button className="id-appbar-action" disabled={exporting} onClick={() => handleExport(exportId)}>
+              {exporting ? '…' : '导出'}
+            </button>
+          </div>
+        )}
         <div className="id-app-scroll">
+          {embedded && (
+            <div style={{ display: 'flex', alignItems: 'center', padding: '0.4rem 0.8rem', gap: '0.5rem' }}>
+              <button className="id-btn sm" onClick={back}>← 返回</button>
+              <button className="id-btn sm" style={{ marginLeft: 'auto' }} disabled={exporting} onClick={() => handleExport(exportId)}>
+                {exporting ? '…' : '导出'}
+              </button>
+            </div>
+          )}
           {msg && <div className="id-card" style={{ textAlign: 'center', fontSize: '0.85rem', borderColor: 'var(--cyan)' }}>{msg}</div>}
           <div style={{ padding: '0.6rem 0.8rem', borderBottom: '1px solid var(--border-soft)' }}>
             <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>{title}</div>
@@ -303,11 +313,18 @@ export function ArchiveApp({ onBack }: { onBack: () => void }) {
 
     return (
       <div className="id-app">
-        <div className="id-appbar">
-          <button className="id-appbar-back" onClick={back}>←</button>
-          <span className="id-appbar-title">{selectedChar.name}</span>
-        </div>
+        {!embedded && (
+          <div className="id-appbar">
+            <button className="id-appbar-back" onClick={back}>←</button>
+            <span className="id-appbar-title">{selectedChar.name}</span>
+          </div>
+        )}
         <div className="id-app-scroll">
+          {embedded && (
+            <div style={{ padding: '0.4rem 0.8rem' }}>
+              <button className="id-btn sm" onClick={back}>← 返回</button>
+            </div>
+          )}
           {msg && <div className="id-card" style={{ textAlign: 'center', fontSize: '0.85rem', borderColor: 'var(--cyan)' }}>{msg}</div>}
 
           {tab === 'scene' && (() => {
@@ -417,13 +434,15 @@ export function ArchiveApp({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="id-app">
-      <div className="id-appbar">
-        <button className="id-appbar-back" onClick={onBack}>←</button>
-        <span className="id-appbar-title">回忆</span>
-        <button className="id-appbar-action" disabled={exporting} onClick={() => handleExport()}>
-          {exporting ? '…' : '全部导出'}
-        </button>
-      </div>
+      {!embedded && (
+        <div className="id-appbar">
+          <button className="id-appbar-back" onClick={onBack}>←</button>
+          <span className="id-appbar-title">回忆</span>
+          <button className="id-appbar-action" disabled={exporting} onClick={() => handleExport()}>
+            {exporting ? '…' : '全部导出'}
+          </button>
+        </div>
+      )}
       <div className="id-app-scroll">
         {msg && <div className="id-card" style={{ textAlign: 'center', fontSize: '0.85rem', borderColor: 'var(--cyan)' }}>{msg}</div>}
 

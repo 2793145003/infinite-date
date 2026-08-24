@@ -82,6 +82,175 @@ export function isCreationKeyword(text: string): boolean {
   return CREATION_KEYWORDS.some(k => lower === k || lower.includes(k));
 }
 
+/**
+ * 从 draft（草稿 JSON）构建 CharacterData，含 name 校验。
+ * 聊天式创建（finalize）与 JSON 导入（import）共用。
+ */
+function buildCharacterData(draft: Record<string, unknown>): { charData?: CharacterData; error?: string } {
+  const name = String(draft.name ?? '').trim();
+  if (!name) return { error: '角色名不能为空' };
+
+  const charData: CharacterData = {
+    name,
+    gender: draft.gender === 'male' || draft.gender === 'female' ? draft.gender : undefined,
+    age: String(draft.age ?? ''),
+    appearance: String(draft.appearance ?? ''),
+    personality: {
+      surface: String((draft.personality as Record<string, unknown>)?.surface ?? ''),
+      core: String((draft.personality as Record<string, unknown>)?.core ?? ''),
+      extreme: String((draft.personality as Record<string, unknown>)?.extreme ?? ''),
+    },
+    speechStyle: {
+      description: String((draft.speechStyle as Record<string, unknown>)?.description ?? ''),
+      examples: normalizeSpeechExamples((draft.speechStyle as Record<string, unknown>)?.examples),
+    },
+    textingStyle: {
+      description: String((draft.textingStyle as Record<string, unknown>)?.description ?? ''),
+      examples: normalizeStringArray((draft.textingStyle as Record<string, unknown>)?.examples),
+    },
+    background: {
+      origin: String((draft.background as Record<string, unknown>)?.origin ?? ''),
+      shaping: String((draft.background as Record<string, unknown>)?.shaping ?? ''),
+      current: String((draft.background as Record<string, unknown>)?.current ?? ''),
+    },
+    emotional_signals: {
+      nervous: String((draft.emotional_signals as Record<string, unknown>)?.nervous ?? ''),
+      happy: String((draft.emotional_signals as Record<string, unknown>)?.happy ?? ''),
+      angry: String((draft.emotional_signals as Record<string, unknown>)?.angry ?? ''),
+      moved: String((draft.emotional_signals as Record<string, unknown>)?.moved ?? ''),
+      defensive: String((draft.emotional_signals as Record<string, unknown>)?.defensive ?? ''),
+    },
+    likes: normalizeStringArray(draft.likes),
+    dislikes: normalizeStringArray(draft.dislikes),
+    boundaries: String(draft.boundaries ?? ''),
+    goals: String(draft.goals ?? ''),
+    quirks: String(draft.quirks ?? ''),
+    backstory_milestones: normalizeMilestones(draft.backstory_milestones),
+    player_relation: String(draft.player_relation ?? '').trim() || undefined,
+    skills: String(draft.skills ?? '').trim() || undefined,
+    ineptitudes: String(draft.ineptitudes ?? '').trim() || undefined,
+    sleepType: draft.sleepType === 'night_owl' || draft.sleepType === 'normal' ? draft.sleepType : undefined,
+    avatar: typeof draft.avatar === 'string' && draft.avatar ? draft.avatar : undefined,
+  };
+
+  return { charData };
+}
+
+type CreateCharacterResult = { ok: true; characterId: string; characterName: string } | { ok: false; status: number; error: string };
+
+/**
+ * 创建角色（事务：消耗权限 + 建 characters/character_player_data/character_instances/relationships/地点/家）。
+ * 聊天式创建（finalize）与 JSON 导入（import）共用。sessionId 可选：传入则标记创建会话完成。
+ */
+function createCharacter(playerId: string, charData: CharacterData, isPublic: boolean, sessionId?: string): CreateCharacterResult {
+  const ts = now();
+  const pub = isPublic !== false; // 默认公开
+  const name = charData.name;
+
+  db.exec('BEGIN');
+  try {
+    // 消耗权限
+    const cost = pub ? getCosts().create_public_npc : getCosts().create_private_npc;
+    const spendResult = spendPlayerPermission(playerId, cost, 'create_npc');
+    if (!spendResult.ok) {
+      db.exec('ROLLBACK');
+      return { ok: false, status: 403, error: `权限不足（需要${cost}）` };
+    }
+
+    // 同名角色已存在则复用（fork机制：characters是公共模板，不重复创建）
+    const existing = db.prepare(
+      'SELECT id FROM characters WHERE json_extract(character_data, \'$.name\') = ? COLLATE NOCASE LIMIT 1'
+    ).get(name) as { id: string } | undefined;
+    const charId = existing?.id ?? genId();
+
+    if (!existing) {
+      db.prepare(
+        'INSERT INTO characters (id, character_data, creator_player_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+      ).run(charId, JSON.stringify(charData), playerId, ts, ts);
+    }
+
+    // 创建character_player_data（override或private）
+    let cpdId: string;
+    if (pub) {
+      const existingCpd = db.prepare(
+        'SELECT id FROM character_player_data WHERE player_id = ? AND source_character_id = ?'
+      ).get(playerId, charId) as { id: string } | undefined;
+      if (existingCpd) {
+        cpdId = existingCpd.id;
+        db.prepare(
+          'UPDATE character_player_data SET character_data = ?, updated_at = ? WHERE id = ?'
+        ).run(JSON.stringify(charData), ts, cpdId);
+      } else {
+        cpdId = genId();
+        db.prepare(
+          'INSERT INTO character_player_data (id, source_character_id, player_id, character_data, is_free_override, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)'
+        ).run(cpdId, charId, playerId, JSON.stringify(charData), ts, ts);
+      }
+    } else {
+      cpdId = genId();
+      db.prepare(
+        'INSERT INTO character_player_data (id, source_character_id, player_id, character_data, is_free_override, created_at, updated_at) VALUES (?, NULL, ?, ?, 0, ?, ?)'
+      ).run(cpdId, playerId, JSON.stringify(charData), ts, ts);
+    }
+
+    // fork 同一角色时，清理旧的个人数据（保持单副本）
+    if (existing) {
+      db.prepare('DELETE FROM message_threads WHERE player_id = ? AND character_id = ?').run(playerId, charId);
+      db.prepare('DELETE FROM friendships WHERE player_id = ? AND character_id = ?').run(playerId, charId);
+      db.prepare('DELETE FROM relationships WHERE player_id = ? AND character_id = ?').run(playerId, charId);
+      db.prepare('DELETE FROM character_instances WHERE player_id = ? AND source_character_id = ?').run(playerId, charId);
+    }
+
+    // 创建character_instance
+    const instanceId = genId();
+    db.prepare(
+      'INSERT INTO character_instances (id, player_id, source_type, source_character_id, character_data_id, instance_no, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?)'
+    ).run(instanceId, playerId, pub ? 'override' : 'private', pub ? charId : null, cpdId, ts);
+
+    // 创建relationship（角色存在于玩家世界，但还不是好友）
+    const initDesc = charData.player_relation || '刚认识的陌生人';
+    const relCharId = pub ? charId : cpdId;
+    db.prepare(
+      'INSERT OR IGNORE INTO relationships (id, player_id, character_id, player_description, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(genId(), playerId, relCharId, initDesc, ts);
+
+    // 放到中央广场
+    db.prepare(
+      'INSERT OR IGNORE INTO location_npc_access (id, location_id, character_id, activity, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(genId(), 'plaza', relCharId, '在空旷的广场上发呆', ts);
+
+    // 建家
+    {
+      const hasHome = db.prepare('SELECT 1 FROM location_homes WHERE character_id = ?').get(relCharId);
+      if (!hasHome) {
+        const homeName = `${name}家`;
+        const existingHome = db.prepare(`SELECT id FROM locations WHERE name = ? AND creator_type = 'player'`).get(homeName) as { id: string } | undefined;
+        if (existingHome) {
+          db.prepare('INSERT OR IGNORE INTO location_homes (location_id, character_id, created_at) VALUES (?, ?, ?)').run(existingHome.id, relCharId, ts);
+        } else {
+          const homeId = `home-${relCharId}`;
+          db.prepare(
+            `INSERT OR IGNORE INTO locations (id, world_id, name, summary, creator_type, is_public, created_at)
+             VALUES (?, 'default-world', ?, ?, 'player', 1, ?)`
+          ).run(homeId, homeName, `${name}的住所`, ts);
+          db.prepare('INSERT OR IGNORE INTO location_homes (location_id, character_id, created_at) VALUES (?, ?, ?)').run(homeId, relCharId, ts);
+        }
+      }
+    }
+
+    // 标记创建会话完成（仅聊天式创建）
+    if (sessionId) {
+      db.prepare('UPDATE creator_sessions SET status = ? WHERE id = ?').run('completed', sessionId);
+    }
+
+    db.exec('COMMIT');
+    return { ok: true, characterId: pub ? charId : cpdId, characterName: name };
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* 事务可能已不在 */ }
+    return { ok: false, status: 500, error: '创建角色失败，请重试' };
+  }
+}
+
 export async function creationRoutes(app: FastifyInstance): Promise<void> {
 
   // 开始/恢复创建会话
@@ -257,170 +426,21 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
     // 玩家手动编辑的角色卡优先
     const draft = draftOverride ?? jsonParse<Record<string, unknown>>(session.draft_character, {});
 
-    // 基本校验
-    const name = String(draft.name ?? '').trim();
-    if (!name) {
-      return reply.code(400).send({ error: '角色名不能为空' });
+    // 基本校验 + 构建 CharacterData
+    const built = buildCharacterData(draft);
+    if (built.error || !built.charData) {
+      return reply.code(400).send({ error: built.error ?? '角色数据无效' });
     }
+    const charData = built.charData;
 
-    const charData: CharacterData = {
-      name,
-      gender: draft.gender === 'male' || draft.gender === 'female' ? draft.gender : undefined,
-      age: String(draft.age ?? ''),
-      appearance: String(draft.appearance ?? ''),
-      personality: {
-        surface: String((draft.personality as Record<string, unknown>)?.surface ?? ''),
-        core: String((draft.personality as Record<string, unknown>)?.core ?? ''),
-        extreme: String((draft.personality as Record<string, unknown>)?.extreme ?? ''),
-      },
-      speechStyle: {
-        description: String((draft.speechStyle as Record<string, unknown>)?.description ?? ''),
-        examples: normalizeSpeechExamples((draft.speechStyle as Record<string, unknown>)?.examples),
-      },
-      textingStyle: {
-        description: String((draft.textingStyle as Record<string, unknown>)?.description ?? ''),
-        examples: normalizeStringArray((draft.textingStyle as Record<string, unknown>)?.examples),
-      },
-      background: {
-        origin: String((draft.background as Record<string, unknown>)?.origin ?? ''),
-        shaping: String((draft.background as Record<string, unknown>)?.shaping ?? ''),
-        current: String((draft.background as Record<string, unknown>)?.current ?? ''),
-      },
-      emotional_signals: {
-        nervous: String((draft.emotional_signals as Record<string, unknown>)?.nervous ?? ''),
-        happy: String((draft.emotional_signals as Record<string, unknown>)?.happy ?? ''),
-        angry: String((draft.emotional_signals as Record<string, unknown>)?.angry ?? ''),
-        moved: String((draft.emotional_signals as Record<string, unknown>)?.moved ?? ''),
-        defensive: String((draft.emotional_signals as Record<string, unknown>)?.defensive ?? ''),
-      },
-      likes: normalizeStringArray(draft.likes),
-      dislikes: normalizeStringArray(draft.dislikes),
-      boundaries: String(draft.boundaries ?? ''),
-      goals: String(draft.goals ?? ''),
-      quirks: String(draft.quirks ?? ''),
-      backstory_milestones: normalizeMilestones(draft.backstory_milestones),
-      player_relation: String(draft.player_relation ?? '').trim() || undefined,
-      skills: String(draft.skills ?? '').trim() || undefined,
-      ineptitudes: String(draft.ineptitudes ?? '').trim() || undefined,
-      sleepType: draft.sleepType === 'night_owl' || draft.sleepType === 'normal' ? draft.sleepType : undefined,
-      avatar: typeof draft.avatar === 'string' && draft.avatar ? draft.avatar : undefined,
-    };
-
-    const ts = now();
     const pub = isPublic !== false; // 默认公开
 
-    // 消耗权限 + 全部建数据操作包在同一个事务里：任一步失败 ROLLBACK，扣费与数据一起回滚，不产生"白扣费/半成品"
-    db.exec('BEGIN');
-    try {
-    // 消耗权限
-    const cost = pub ? getCosts().create_public_npc : getCosts().create_private_npc;
-    const spendResult = spendPlayerPermission(playerId, cost, 'create_npc');
-    if (!spendResult.ok) {
-      db.exec('ROLLBACK');
-      return reply.code(403).send({ error: `权限不足（需要${cost}）` });
+    const result = createCharacter(playerId, charData, pub, sessionId);
+    if (!result.ok) {
+      if (result.status === 500) app.log.error({ err: result.error }, '创建角色失败');
+      return reply.code(result.status).send({ error: result.error });
     }
-
-    // 同名角色已存在则复用（fork机制：characters是公共模板，不重复创建）
-    const existing = db.prepare(
-      'SELECT id FROM characters WHERE json_extract(character_data, \'$.name\') = ? COLLATE NOCASE LIMIT 1'
-    ).get(name) as { id: string } | undefined;
-    const charId = existing?.id ?? genId();
-
-    if (!existing) {
-      db.prepare(
-        'INSERT INTO characters (id, character_data, creator_player_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-      ).run(charId, JSON.stringify(charData), playerId, ts, ts);
-    }
-
-    // 创建character_player_data（override或private）
-    let cpdId: string;
-    if (pub) {
-      // 公共角色：同角色复用已有的player_data，更新内容
-      const existingCpd = db.prepare(
-        'SELECT id FROM character_player_data WHERE player_id = ? AND source_character_id = ?'
-      ).get(playerId, charId) as { id: string } | undefined;
-      if (existingCpd) {
-        cpdId = existingCpd.id;
-        db.prepare(
-          'UPDATE character_player_data SET character_data = ?, updated_at = ? WHERE id = ?'
-        ).run(JSON.stringify(charData), ts, cpdId);
-      } else {
-        cpdId = genId();
-        db.prepare(
-          'INSERT INTO character_player_data (id, source_character_id, player_id, character_data, is_free_override, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)'
-        ).run(cpdId, charId, playerId, JSON.stringify(charData), ts, ts);
-      }
-    } else {
-      // 私有角色：source_character_id为NULL
-      cpdId = genId();
-      db.prepare(
-        'INSERT INTO character_player_data (id, source_character_id, player_id, character_data, is_free_override, created_at, updated_at) VALUES (?, NULL, ?, ?, 0, ?, ?)'
-      ).run(cpdId, playerId, JSON.stringify(charData), ts, ts);
-    }
-
-    // fork 同一角色时，清理旧的个人数据（保持单副本）
-    if (existing) {
-      db.prepare('DELETE FROM message_threads WHERE player_id = ? AND character_id = ?').run(playerId, charId);
-      db.prepare('DELETE FROM friendships WHERE player_id = ? AND character_id = ?').run(playerId, charId);
-      db.prepare('DELETE FROM relationships WHERE player_id = ? AND character_id = ?').run(playerId, charId);
-      db.prepare('DELETE FROM character_instances WHERE player_id = ? AND source_character_id = ?').run(playerId, charId);
-    }
-
-    // 创建character_instance
-    const instanceId = genId();
-    db.prepare(
-      'INSERT INTO character_instances (id, player_id, source_type, source_character_id, character_data_id, instance_no, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?)'
-    ).run(instanceId, playerId, pub ? 'override' : 'private', pub ? charId : null, cpdId, ts);
-
-    // 创建relationship（角色存在于玩家世界，但还不是好友）
-    const initDesc = charData.player_relation || '刚认识的陌生人';
-    const relCharId = pub ? charId : cpdId;
-    db.prepare(
-      'INSERT OR IGNORE INTO relationships (id, player_id, character_id, player_description, updated_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(genId(), playerId, relCharId, initDesc, ts);
-
-    // 放到中央广场（创建的角色默认在中央广场，后续行程系统可动态调整）
-    db.prepare(
-      'INSERT OR IGNORE INTO location_npc_access (id, location_id, character_id, activity, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(genId(), 'plaza', relCharId, '在空旷的广场上发呆', ts);
-
-    // 建家（与 db/index.ts 启动时建家逻辑一致：已有同名玩家地点则复用，否则新建系统家）
-    {
-      const hasHome = db.prepare('SELECT 1 FROM location_homes WHERE character_id = ?').get(relCharId);
-      if (!hasHome) {
-        const homeName = `${name}家`;
-        // 已有同名玩家地点？加入 location_homes
-        const existingHome = db.prepare(`SELECT id FROM locations WHERE name = ? AND creator_type = 'player'`).get(homeName) as { id: string } | undefined;
-        if (existingHome) {
-          db.prepare('INSERT OR IGNORE INTO location_homes (location_id, character_id, created_at) VALUES (?, ?, ?)').run(existingHome.id, relCharId, ts);
-        } else {
-          const homeId = `home-${relCharId}`;
-          db.prepare(`
-            INSERT OR IGNORE INTO locations (id, world_id, name, summary, creator_type, is_public, created_at)
-            VALUES (?, 'default-world', ?, ?, 'player', 1, ?)
-          `).run(homeId, homeName, `${name}的住所`, ts);
-          db.prepare('INSERT OR IGNORE INTO location_homes (location_id, character_id, created_at) VALUES (?, ?, ?)').run(homeId, relCharId, ts);
-        }
-      }
-    }
-
-    // 标记创建会话完成
-    db.prepare(
-      'UPDATE creator_sessions SET status = ? WHERE id = ?'
-    ).run('completed', sessionId);
-
-    db.exec('COMMIT');
-
-    return reply.send({
-      characterId: pub ? charId : cpdId,
-      characterName: name,
-    });
-    } catch (err) {
-      // 任一步失败：整体回滚，扣费与数据一起还原，不产生"白扣费/半成品"
-      try { db.exec('ROLLBACK'); } catch { /* 事务可能已不在 */ }
-      app.log.error({ err }, '创建角色失败');
-      return reply.code(500).send({ error: '创建角色失败，请重试' });
-    }
+    return reply.send({ characterId: result.characterId, characterName: result.characterName });
   });
 
   // 取消创建
@@ -434,5 +454,44 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
     ).run('cancelled', sessionId, playerId);
 
     return reply.send({ ok: true });
+  });
+
+  // JSON 导入角色（输入框粘贴 / 上传文件解析后调用）
+  app.post('/creation/import', async (req, reply) => {
+    const playerId = requireAuth(req, reply);
+    if (!playerId) return;
+
+    const { json, isPublic } = req.body as { json?: string; isPublic?: boolean };
+
+    if (!json || typeof json !== 'string' || !json.trim()) {
+      return reply.code(400).send({ error: '请提供 JSON 数据' });
+    }
+
+    // 解析 JSON（校验格式）
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return reply.code(400).send({ error: 'JSON 格式错误，无法解析' });
+    }
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return reply.code(400).send({ error: 'JSON 必须是一个角色卡对象' });
+    }
+
+    const draft = parsed as Record<string, unknown>;
+
+    // 校验字段 + 构建 CharacterData
+    const built = buildCharacterData(draft);
+    if (built.error || !built.charData) {
+      return reply.code(400).send({ error: built.error ?? '角色数据无效' });
+    }
+
+    const result = createCharacter(playerId, built.charData, isPublic !== false, undefined);
+    if (!result.ok) {
+      if (result.status === 500) app.log.error({ err: result.error }, '导入角色失败');
+      return reply.code(result.status).send({ error: result.error });
+    }
+    return reply.send({ characterId: result.characterId, characterName: result.characterName });
   });
 }

@@ -79,3 +79,29 @@ export function grantPlayerPermission(playerId: string, amount: number, reason: 
   db.prepare(`INSERT INTO permission_transactions (id, player_id, wallet_type, delta, reason, source_id, balance_after, created_at) VALUES (?, ?, 'player', ?, ?, ?, ?, ?)`).run(genId(), playerId, amount, reason, sourceId ?? null, newBalance, ts);
   return newBalance;
 }
+
+/** 给 NPC 实例发放权限（任务奖励）。先 INSERT OR IGNORE 钱包再 UPDATE。 */
+export function grantCharacterPermission(
+  playerId: string,
+  characterId: string,
+  instanceId: string,
+  amount: number,
+  reason: string,
+  sourceId?: string,
+): void {
+  const ts = now();
+  db.prepare(`
+    INSERT OR IGNORE INTO character_permissions (player_id, character_id, character_instance_id, balance, total_earned, total_spent, updated_at)
+    VALUES (?, ?, ?, 0, 0, 0, ?)
+  `).run(playerId, characterId, instanceId, ts);
+
+  const row = db.prepare('SELECT balance, total_earned FROM character_permissions WHERE player_id = ? AND character_id = ? AND character_instance_id = ?').get(playerId, characterId, instanceId) as { balance: number; total_earned: number };
+  const newBalance = row.balance + amount;
+  db.prepare('UPDATE character_permissions SET balance = ?, total_earned = ?, updated_at = ? WHERE player_id = ? AND character_id = ? AND character_instance_id = ?')
+    .run(newBalance, row.total_earned + amount, ts, playerId, characterId, instanceId);
+
+  db.prepare(`
+    INSERT INTO permission_transactions (id, player_id, character_id, character_instance_id, wallet_type, delta, reason, source_id, balance_after, created_at)
+    VALUES (?, ?, ?, ?, 'character', ?, ?, ?, ?, ?)
+  `).run(genId(), playerId, characterId, instanceId, amount, reason, sourceId ?? null, newBalance, ts);
+}

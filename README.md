@@ -6,13 +6,15 @@
 
 项目代码由 [Hermes Agent](https://hermes-agent.nousresearch.com)（Nous Research 的 AI 编程助手）完成，人类负责设计决策、需求定义和质量验收。
 
+新版前端由群友 [@骨](https://github.com/1159522696kugu-rgb) 提供。
+
 详细设计见 [DESIGN.md](./DESIGN.md)。
 
 手机端截图：
 
 | 约会 | 首页 | 地图 | 短信 | 朋友圈 |
 |---|---|---|---|---|
-| ![约会](./screenshot/约会.PNG) | ![首页](./screenshot/新首页.PNG) | ![地图](./screenshot/地图.PNG) | ![短信](./screenshot/短信.PNG) | ![朋友圈](./screenshot/朋友圈.PNG) |
+| ![约会](./screenshot/约会0824.PNG) | ![首页](./screenshot/首页0824.PNG) | ![地图](./screenshot/地图0824.PNG) | ![短信](./screenshot/短信0824.PNG) | ![朋友圈](./screenshot/朋友圈0824.PNG) |
 
 ---
 
@@ -22,10 +24,10 @@
 |---|---|---|
 | 后端 | Fastify 5 + TypeScript + tsx | Node 22+，tsx watch 热重载 |
 | 数据库 | node:sqlite（内置） | 零原生依赖，WAL 模式，FK 级联删除 |
-| 前端 | React 18 + Vite 6 | 手机 UI 适配，暗色主题 |
+| 前端 | React 19 + Vite 6 + Tailwind 4 | 心动终端全屏 UI（web-v4），蝴蝶水彩壁纸，反代 /api→后端 |
 | LLM | vLLM（OpenAI 兼容 API） | Gemma-4-26B-A4B-it，guided_json 结构化输出，多模态图文 |
 | 向量检索 | bge-base-zh-v1.5 | 768 维语义检索，跨场记忆累积 |
-| 包管理 | pnpm workspace | monorepo: server / web / shared |
+| 包管理 | pnpm workspace | monorepo: server / web-v4 / shared |
 
 ---
 
@@ -42,7 +44,7 @@
 - **三种角色形态**：公共态 / override 私有态（fork 完整角色卡）/ 完全私有态
 - **per-player LLM 配置**：每个玩家可配置自己的 LLM endpoint，未填回落环境变量默认值
 - **多模态**：图片发送（短信/约会/朋友圈），角色通过 vLLM 多模态能力「看到」图片
-- **手机 UI**：暗色主题、打字机动画、桌面图标、摸鱼模式（伪装 AI 助手）
+- **心动终端全屏 UI**：蝴蝶水彩壁纸、打字机动画、摸鱼浮窗（伪装 AI 助手）
 
 ---
 
@@ -75,14 +77,14 @@ cp .env.example .env
 # 后端（3000 端口，热重载）
 cd apps/server && pnpm dev
 
-# 前端（8080 端口）
-cd apps/web && pnpm dev
+# 前端（3001 端口，反代 /api→后端 3000）
+cd apps/web-v4 && pnpm dev
 
 # 或一起启动
 pnpm dev
 ```
 
-打开 `http://localhost:8080`。
+打开 `http://localhost:3001/v4/`。
 
 ### 创建第一个账号（管理员）
 
@@ -144,12 +146,12 @@ infinite-date/
 │   │       ├── lib/          # 核心逻辑（场景引擎/记忆/行程/主动消息…）
 │   │       ├── llm/          # LLM 适配器
 │   │       └── prompt/       # Prompt 模板（.txt 文件，改文件即改 prompt）
-│   └── web/                  # 前端
+│   └── web-v4/               # 前端（心动终端，全屏 UI）
+│       ├── server.ts         # Express + Vite middleware + 反代 /api→3000（multipart 直通）
 │       └── src/
-│           ├── App.tsx       # 路由控制（View 状态机）
-│           ├── pages/        # 页面组件
-│           ├── components/   # 通用组件
-│           └── lib/          # API 客户端 + 工具
+│           ├── App.tsx       # activeTab 状态机 + 全屏布局 + 行程四态
+│           ├── components/   # 42 个页面/弹窗组件
+│           └── lib/          # API 客户端 + 主题 + 地图几何
 └── pnpm-workspace.yaml
 ```
 
@@ -158,9 +160,9 @@ infinite-date/
 ## 架构概览
 
 ```
-玩家浏览器（8080）
+玩家浏览器（3001/v4）
     │
-    ├── Vite dev server ──proxy /api──▶ Fastify（3000）
+    ├── web-v4 Express + Vite ──proxy /api──▶ Fastify（3000）
     │                                      │
     │                                      ├── SQLite（node:sqlite，WAL，FK 级联）
     │                                      │

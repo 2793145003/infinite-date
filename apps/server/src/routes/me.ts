@@ -53,8 +53,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       const factCount = (db.prepare('SELECT COUNT(*) AS cnt FROM player_facts WHERE player_id = ? AND character_id = ?').get(playerId, charId) as { cnt: number }).cnt;
       const chronCount = (db.prepare('SELECT COUNT(*) AS cnt FROM chronicles WHERE player_id = ? AND character_id = ? AND source != ?').get(playerId, charId, 'dream_scenario') as { cnt: number }).cnt;
 
-      // 好友状态
-      const isFriend = !!db.prepare('SELECT 1 FROM friendships WHERE player_id = ? AND character_id = ? AND status = ?').get(playerId, charId, 'active');
+      // 好友状态 + 相伴起始时间
+      const friendship = db.prepare('SELECT created_at FROM friendships WHERE player_id = ? AND character_id = ? AND status = ?').get(playerId, charId, 'active') as { created_at: number } | undefined;
+      const isFriend = !!friendship;
 
       // 名字：fork优先 → 公共角色 → fallback
       let name = pubCharMap.get(charId) ?? '未知角色';
@@ -72,6 +73,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         factCount,
         chronicleCount: chronCount,
         isFriend,
+        friendCreatedAt: friendship?.created_at ?? null,
       });
     }
 

@@ -16,7 +16,7 @@ import { genId, now, jsonParse } from '../lib/util';
 import { loadPrompt, renderPrompt } from '../prompt/loader';
 import { chat, tryParseJsonReply, type ChatMessage } from '../llm/adapter';
 import { sendEmail } from './email';
-import { grantPlayerPermission, ensurePlayerWallet } from '../lib/permission';
+import { grantPlayerPermission, grantCharacterPermission, ensurePlayerWallet } from '../lib/permission';
 import { getCosts } from '../lib/permission-config';
 import { castHexagram, renderHexagramLayer, renderNajiaLayer } from '../lib/hexagram-prompt';
 import { rollTheme, renderThemeGuide, rollGoal, renderGoalGuide } from '../lib/world-theme';
@@ -494,10 +494,10 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
     if (!playerId) return;
 
     const { missionId } = req.params as { missionId: string };
-    const { companionId } = req.body as { companionId?: string };
+    const { companionId: reqCompanionId } = req.body as { companionId?: string };
 
     const mission = db.prepare(`
-      SELECT * FROM missions WHERE id = ? AND player_id = ? AND quest_type = 'world'
+      SELECT * FROM missions WHERE id = ? AND player_id = ? AND quest_type IN ('world', 'npc')
     `).get(missionId, playerId) as unknown as MissionRow | undefined;
 
     if (!mission) {
@@ -506,6 +506,9 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
     if (mission.status !== 'available') {
       return reply.code(400).send({ error: '任务状态不允许接受' });
     }
+
+    // NPC 任务同行者 = 邀请 NPC 本人（assignee_id），无需玩家再选；世界任务由玩家选同伴
+    const companionId = mission.quest_type === 'npc' ? mission.assignee_id : reqCompanionId;
     if (!companionId) {
       return reply.code(400).send({ error: '需要选择同行NPC' });
     }
@@ -553,6 +556,13 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
     db.prepare(`
       UPDATE missions SET status = 'active', character_id = ?, started_at = ? WHERE id = ?
     `).run(companionId, ts, missionId);
+
+    // 接受后清除邀请短信的 task_invite 标记：按钮消失，刷新不复活
+    // （此前只导航不删标记，回到短信页仍显示「接受/拒绝」，再点接受报 400）
+    db.prepare(`
+      UPDATE text_messages SET metadata = json_remove(metadata, '$.task_invite')
+      WHERE player_id = ? AND sender = 'npc' AND json_extract(metadata, '$.task_invite.missionId') = ?
+    `).run(playerId, missionId);
 
     // 建任务地图（temp- 前缀，任务结束删除；独立 world_id，主城查询不可见）
     const mapId = `temp-${missionId}`;
@@ -691,8 +701,8 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
 
     const { missionId } = req.params as { missionId: string };
     const mission = db.prepare(`
-      SELECT status FROM missions WHERE id = ? AND player_id = ?
-    `).get(missionId, playerId) as { status: string } | undefined;
+      SELECT status, quest_type FROM missions WHERE id = ? AND player_id = ?
+    `).get(missionId, playerId) as { status: string; quest_type: string } | undefined;
 
     if (!mission) {
       return reply.code(404).send({ error: '任务不存在' });
@@ -701,7 +711,20 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: '任务状态不允许拒绝' });
     }
 
-    db.prepare("UPDATE missions SET status = 'declined' WHERE id = ?").run(missionId);
+    if (mission.quest_type === 'npc') {
+      // NPC 任务拒绝 ≠ 作废，而是转 solo：NPC 独自去完成（1h~3h roll 完成时刻）
+      const soloDurationMs = 60 * 60 * 1000 + Math.floor(Math.random() * 2 * 60 * 60 * 1000);
+      db.prepare("UPDATE missions SET status = 'solo', solo_complete_at = ? WHERE id = ?").run(now() + soloDurationMs, missionId);
+    } else {
+      db.prepare("UPDATE missions SET status = 'declined' WHERE id = ?").run(missionId);
+    }
+
+    // 拒绝后清除邀请短信的 task_invite 标记（此前前端本地删不持久，刷新后按钮复活）
+    db.prepare(`
+      UPDATE text_messages SET metadata = json_remove(metadata, '$.task_invite')
+      WHERE player_id = ? AND sender = 'npc' AND json_extract(metadata, '$.task_invite.missionId') = ?
+    `).run(playerId, missionId);
+
     return reply.send({ ok: true });
   });
 
@@ -747,7 +770,7 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(500).send({ error: '任务关联缺失' });
     }
 
-    const mission = db.prepare('SELECT id, world_id FROM missions WHERE id = ? AND player_id = ?').get(missionId, playerId) as { id: string; world_id: string } | undefined;
+    const mission = db.prepare('SELECT id, world_id, quest_type FROM missions WHERE id = ? AND player_id = ?').get(missionId, playerId) as { id: string; world_id: string; quest_type: string } | undefined;
     if (!mission) {
       return reply.code(404).send({ error: '任务不存在' });
     }
@@ -755,8 +778,12 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
     // 1) 结束场景会话
     try { await endSceneSession(sessionId, playerId); } catch { /* 结束失败不阻塞评级 */ }
 
-    // 2) 评级 + 发奖
-    await evaluateWorldMission(missionId, playerId, sessionId, mission.world_id);
+    // 2) 收尾：NPC 任务走「简单判断 + 宽松好评」，世界任务走严格数值判定 + 评级
+    if (mission.quest_type === 'npc') {
+      await evaluateNpcMission(missionId, playerId, sessionId, mission.world_id);
+    } else {
+      await evaluateWorldMission(missionId, playerId, sessionId, mission.world_id);
+    }
 
     // 3) 删除任务地图（temp- 一次性地图）
     try {
@@ -886,73 +913,171 @@ export async function evaluateWorldMission(
     totalReward = 0;
   }
 
-  // 写入评级结果（原子抢占：evaluation_result 为空才写，changes=0 = 已被其它并发评级写过 → 不发奖）
-  // 并发安全：两批 evaluate 同时跑，只有首位写入 evaluation_result 的那批会发奖，另一批 changes=0 静默跳过，杜绝重复发权限。
+  // 结算放在【单个事务】里：评级结果写入（原子抢占）+ 发权限 + 更新玩家 rating 绑定提交。
+  // 任一步失败整体回滚，任务不会留下「completed 但没发奖」的中间态，重试可正常补发；
+  // BEGIN IMMEDIATE 一开始就拿写锁，把并发抢占与发奖串行化，杜绝重复发权限。
   const ts = now();
-  const claim = db.prepare(`
-    UPDATE missions 
-    SET status = 'completed', evaluation_result = ?, rating_score = ?, completed_at = ?
-    WHERE id = ? AND evaluation_result IS NULL
-  `).run(JSON.stringify({ ...evaluation, stats_state: statsState, stats_config: statsConfig }), ratingScore, ts, missionId);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const claim = db.prepare(`
+      UPDATE missions 
+      SET status = 'completed', evaluation_result = ?, rating_score = ?, completed_at = ?
+      WHERE id = ? AND evaluation_result IS NULL
+    `).run(JSON.stringify({ ...evaluation, stats_state: statsState, stats_config: statsConfig }), ratingScore, ts, missionId);
 
-  // 发放权限（仅首位完成评级写入的调用发放；重复调用 changes=0 跳过）
-  if (totalReward > 0 && claim.changes === 1) {
-    ensurePlayerWallet(playerId);
-    grantPlayerPermission(playerId, totalReward, 'mission_reward', missionId);
+    // 发放权限（仅首位完成评级写入的调用发放；重复调用 changes=0 跳过）
+    if (totalReward > 0 && claim.changes === 1) {
+      ensurePlayerWallet(playerId);
+      grantPlayerPermission(playerId, totalReward, 'mission_reward', missionId);
 
-    // NPC同伴也获得权限
-    if (mission.character_id) {
-      try {
-        const instance = db.prepare(`
-          SELECT character_instance_id FROM character_instances 
-          WHERE player_id = ? AND character_id = ? AND is_active = 1
-        `).get(playerId, mission.character_id) as { character_instance_id: string } | undefined;
+      // NPC同伴也获得权限
+      if (mission.character_id) {
+        try {
+          const instance = db.prepare(`
+            SELECT id FROM character_instances
+            WHERE player_id = ? AND source_character_id = ? AND is_active = 1
+          `).get(playerId, mission.character_id) as { id: string } | undefined;
 
-        if (instance) {
-          grantCharacterPermission(playerId, mission.character_id, instance.character_instance_id, totalReward, 'mission_reward', missionId);
-        }
-      } catch { /* NPC权限失败不阻塞 */ }
+          if (instance) {
+            grantCharacterPermission(playerId, mission.character_id, instance.id, totalReward, 'mission_reward', missionId);
+          }
+        } catch { /* NPC权限失败不阻塞 */ }
+      }
     }
+
+    // 更新玩家rating_score（加权平均）
+    const player = db.prepare('SELECT rating_score FROM players WHERE id = ?').get(playerId) as { rating_score: number } | undefined;
+    if (player) {
+      // 简单加权：新评分 = 旧评分 * 0.7 + 本次评分 * 0.3
+      const newRating = player.rating_score * 0.7 + ratingScore * 0.3;
+      db.prepare('UPDATE players SET rating_score = ?, updated_at = ? WHERE id = ?').run(newRating, ts, playerId);
+    }
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
   }
 
-  // 更新玩家rating_score（加权平均）
-  const player = db.prepare('SELECT rating_score FROM players WHERE id = ?').get(playerId) as { rating_score: number } | undefined;
-  if (player) {
-    // 简单加权：新评分 = 旧评分 * 0.7 + 本次评分 * 0.3
-    const newRating = player.rating_score * 0.7 + ratingScore * 0.3;
-    db.prepare('UPDATE players SET rating_score = ?, updated_at = ? WHERE id = ?').run(newRating, ts, playerId);
-  }
-
-  // 发邮件通知结果
+  // 发邮件通知结果（事务外，失败不影响已提交的结算）
   const resultText = achieved
     ? `任务完成！\n\n评级：${'★'.repeat(ratingScore)}${'☆'.repeat(3 - ratingScore)}\n${evaluation.summary}\n\n权限奖励：+${totalReward}`
     : `任务未完成。\n\n${evaluation.summary}\n\n世界困境未走向目标态，无权限奖励。`;
   sendEmail(playerId, 'system', `任务结果：${mission.title}`, resultText);
 }
 
-/** NPC权限发放 */
-function grantCharacterPermission(
+/** NPC 邀请任务收尾：简单判断 + 宽松好评（不搞世界任务那套严格数值判定 + 评级） */
+export async function evaluateNpcMission(
+  missionId: string,
   playerId: string,
-  characterId: string,
-  instanceId: string,
-  amount: number,
-  reason: string,
-  sourceId?: string,
-): void {
+  sessionId: string,
+  worldId: string,
+): Promise<void> {
+  const mission = db.prepare('SELECT * FROM missions WHERE id = ?').get(missionId) as unknown as MissionRow | undefined;
+  if (!mission) return;
+
+  const meta = jsonParse<{ mission_goal?: string; target_state?: string }>(mission.metadata, {});
+
+  // 邀请 NPC 名字（同行者 = assignee_id）
+  const companionName = (db.prepare(`
+    SELECT COALESCE(
+      (SELECT json_extract(character_data, '$.name') FROM characters WHERE id = ?),
+      (SELECT json_extract(character_data, '$.name') FROM character_player_data WHERE id = ?)
+    ) AS n
+  `).get(mission.assignee_id, mission.assignee_id) as { n: string | null } | undefined)?.n || '这位同伴';
+
+  // 读对话记录（截断：头5 + 尾20，防超上下文）
+  const allMessages = db.prepare(`
+    SELECT role, character_name, text FROM scene_messages WHERE scene_session_id = ? ORDER BY round_no ASC, created_at ASC
+  `).all(sessionId) as Array<{ role: string; character_name: string | null; text: string }>;
+  const formatMsg = (m: { role: string; character_name: string | null; text: string }) => {
+    const speaker = m.role === 'player' ? '玩家' : m.role === 'narration' ? '旁白' : (m.character_name ?? 'NPC');
+    return `${speaker}：${m.text}`;
+  };
+  let conversationText: string;
+  if (allMessages.length <= 30) {
+    conversationText = allMessages.map(formatMsg).join('\n');
+  } else {
+    const head = allMessages.slice(0, 5).map(formatMsg);
+    const tail = allMessages.slice(-20).map(formatMsg);
+    conversationText = [...head, `……（省略${allMessages.length - 25}条中间对话）……`, ...tail].join('\n');
+  }
+
+  const evalPrompt = renderPrompt(loadPrompt('mission.evaluator-npc'), {
+    companion_name: companionName,
+    mission_goal: meta.mission_goal ?? '帮这个世界里的某个人办成一件小事',
+    target_state: meta.target_state ?? '大家更开心了',
+    conversation: conversationText,
+  });
+
+  let evaluation: { accomplished: boolean; praise: string };
+  try {
+    const result = await chat(
+      [{ role: 'system', content: evalPrompt }, { role: 'user', content: '请评价。' }],
+      {
+        temperature: 0.6,
+        maxTokens: 512,
+        playerId,
+        guidedJson: {
+          type: 'object',
+          properties: { accomplished: { type: 'boolean' }, praise: { type: 'string' } },
+          required: ['accomplished', 'praise'],
+        },
+      },
+    );
+    const parsed = tryParseJsonReply(result.content);
+    if (!parsed) throw new Error('好评解析失败');
+    evaluation = parsed as unknown as typeof evaluation;
+  } catch (err) {
+    console.error('NPC 好评生成失败，默认好评:', err);
+    evaluation = { accomplished: true, praise: '这次一起去做的事，办成了。' };
+  }
+
+  // 宽松评分：完成个差不多就是好评（2）；没办成也给了面子（1）
+  const ratingScore = evaluation.accomplished ? 2 : 1;
+
   const ts = now();
-  // 确保NPC钱包存在
-  db.prepare(`
-    INSERT OR IGNORE INTO character_permissions (player_id, character_id, character_instance_id, balance, total_earned, total_spent, updated_at)
-    VALUES (?, ?, ?, 0, 0, 0, ?)
-  `).run(playerId, characterId, instanceId, ts);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const claim = db.prepare(`
+      UPDATE missions SET status = 'completed', evaluation_result = ?, rating_score = ?, completed_at = ?
+      WHERE id = ? AND evaluation_result IS NULL
+    `).run(JSON.stringify(evaluation), ratingScore, ts, missionId);
 
-  const row = db.prepare('SELECT balance, total_earned FROM character_permissions WHERE player_id = ? AND character_id = ? AND character_instance_id = ?').get(playerId, characterId, instanceId) as { balance: number; total_earned: number };
-  const newBalance = row.balance + amount;
-  db.prepare('UPDATE character_permissions SET balance = ?, total_earned = ?, updated_at = ? WHERE player_id = ? AND character_id = ? AND character_instance_id = ?')
-    .run(newBalance, row.total_earned + amount, ts, playerId, characterId, instanceId);
+    // 更新玩家 rating_score（加权平均，同世界任务；仅首位完成评级写入的调用）
+    if (claim.changes === 1) {
+      const player = db.prepare('SELECT rating_score FROM players WHERE id = ?').get(playerId) as { rating_score: number } | undefined;
+      if (player) {
+        const newRating = player.rating_score * 0.7 + ratingScore * 0.3;
+        db.prepare('UPDATE players SET rating_score = ?, updated_at = ? WHERE id = ?').run(newRating, ts, playerId);
+      }
 
-  db.prepare(`
-    INSERT INTO permission_transactions (id, player_id, character_id, character_instance_id, wallet_type, delta, reason, source_id, balance_after, created_at)
-    VALUES (?, ?, ?, ?, 'character', ?, ?, ?, ?, ?)
-  `).run(genId(), playerId, characterId, instanceId, amount, reason, sourceId ?? null, newBalance, ts);
+      // 合作收益：玩家 + 邀请 NPC 双方各获（「跟玩家一起才赚得多」）
+      const coopReward = getCosts().npc_mission_coop_reward;
+      if (coopReward > 0) {
+        ensurePlayerWallet(playerId);
+        grantPlayerPermission(playerId, coopReward, 'npc_mission_reward', missionId);
+        try {
+          const instance = db.prepare(`
+            SELECT id FROM character_instances
+            WHERE player_id = ? AND source_character_id = ? AND is_active = 1
+          `).get(playerId, mission.assignee_id) as { id: string } | undefined;
+          if (instance) {
+            grantCharacterPermission(playerId, mission.assignee_id, instance.id, coopReward, 'npc_mission_reward', missionId);
+          }
+        } catch { /* NPC权限失败不阻塞 */ }
+      }
+    }
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  // 发邮件通知结果（事务外，失败不影响结算）
+  try {
+    sendEmail(playerId, 'system', `任务结果：${mission.title}`, `${companionName}：${evaluation.praise}\n\n（NPC 任务）`);
+  } catch { /* 通知失败不阻塞 */ }
 }
+

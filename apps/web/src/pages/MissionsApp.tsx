@@ -111,6 +111,12 @@ export function MissionsApp({
   const completedMissions = missions.filter(m => m.status === 'completed');
   const hasWorldMission = missions.some(m => m.questType === 'world' && (m.status === 'available' || m.status === 'active'));
 
+  // 邀请任务（npc，轻松可拒绝）与 世界任务（world，雪中送炭）分开展示
+  const npcAvailable = availableMissions.filter(m => m.questType === 'npc');
+  const worldAvailable = availableMissions.filter(m => m.questType === 'world');
+  const npcActive = activeMissions.filter(m => m.questType === 'npc');
+  const worldActive = activeMissions.filter(m => m.questType === 'world');
+
   return (
     <div className="id-app">
       <div className="id-appbar">
@@ -137,14 +143,31 @@ export function MissionsApp({
           </>
         )}
 
-        {/* 世界任务 */}
-        <div className="id-mission-section-title">🌍 世界任务</div>
         {loading ? (
           <div className="id-empty"><span>加载中…</span></div>
         ) : (
           <>
-            {/* 可接受的任务 */}
-            {availableMissions.map(m => (
+            {/* 邀请任务（npc）：轻松、可拒绝，无需选同伴 */}
+            {(npcAvailable.length > 0 || npcActive.length > 0) && (
+              <>
+                <div className="id-mission-section-title">💌 邀请</div>
+                {npcAvailable.map(m => (
+                  <NpcMissionCard
+                    key={m.id}
+                    mission={m}
+                    onAccept={() => handleAccept(m.id, '')}
+                    onDecline={() => handleDecline(m.id)}
+                  />
+                ))}
+                {npcActive.map(m => (
+                  <ActiveMissionRow key={m.id} mission={m} onNavigate={onNavigate} />
+                ))}
+              </>
+            )}
+
+            {/* 世界任务（world）：雪中送炭，紧迫有分量 */}
+            <div className="id-mission-section-title">🌍 世界任务</div>
+            {worldAvailable.map(m => (
               <MissionCard
                 key={m.id}
                 mission={m}
@@ -152,21 +175,8 @@ export function MissionsApp({
                 onDecline={() => handleDecline(m.id)}
               />
             ))}
-
-            {/* 进行中的任务 */}
-            {activeMissions.map(m => (
-              <div key={m.id} className="id-mission-card active" style={{ marginBottom: '0.5rem' }}>
-                <div className="id-mission-check">⚡</div>
-                <div className="id-mission-info">
-                  <div className="id-mission-title">{m.title}</div>
-                  <div className="id-mission-hint">{m.worldName} · 进行中</div>
-                </div>
-                {m.sessionId ? (
-                  <button className="id-mission-go-btn" onClick={() => onNavigate({ type: 'scenario-scene', scenarioSessionId: m.sessionId as string })}>
-                    继续
-                  </button>
-                ) : null}
-              </div>
+            {worldActive.map(m => (
+              <ActiveMissionRow key={m.id} mission={m} onNavigate={onNavigate} />
             ))}
 
             {/* 生成新任务按钮 */}
@@ -240,6 +250,70 @@ export function MissionsApp({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── 邀请任务卡片（npc） ─────────────────────────────────────
+
+function NpcMissionCard({ mission, onAccept, onDecline }: {
+  mission: MissionInfo;
+  onAccept: () => void;
+  onDecline: () => void;
+}) {
+  const title = mission.title.replace(/^邀请任务：/, '');
+  return (
+    <div className="id-mission-card active" style={{ marginBottom: '0.5rem', flexDirection: 'column', alignItems: 'stretch' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', width: '100%' }}>
+        <div className="id-mission-check">💌</div>
+        <div className="id-mission-info" style={{ flex: 1 }}>
+          <div className="id-mission-title">{title}</div>
+          <div className="id-mission-hint" style={{ lineHeight: 1.6 }}>{mission.description}</div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+        <button
+          onClick={onAccept}
+          style={{
+            flex: 1, padding: '0.5rem', border: 'none', borderRadius: '0.5rem',
+            background: 'var(--accent)', color: '#fff', fontSize: '0.8rem', cursor: 'pointer',
+          }}
+        >
+          接受邀请
+        </button>
+        <button
+          onClick={onDecline}
+          style={{
+            flex: 1, padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '0.5rem',
+            background: 'transparent', color: 'var(--text-mute)', fontSize: '0.8rem', cursor: 'pointer',
+          }}
+        >
+          婉拒
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── 进行中任务行（npc / world 共用） ─────────────────────────
+
+function ActiveMissionRow({ mission, onNavigate }: {
+  mission: MissionInfo;
+  onNavigate: (view: View) => void;
+}) {
+  const title = mission.title.replace(/^邀请任务：/, '');
+  return (
+    <div className="id-mission-card active" style={{ marginBottom: '0.5rem' }}>
+      <div className="id-mission-check">⚡</div>
+      <div className="id-mission-info">
+        <div className="id-mission-title">{title}</div>
+        <div className="id-mission-hint">{mission.worldName || '任务世界'} · 进行中</div>
+      </div>
+      {mission.sessionId ? (
+        <button className="id-mission-go-btn" onClick={() => onNavigate({ type: 'scenario-scene', scenarioSessionId: mission.sessionId as string })}>
+          继续
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -220,6 +220,22 @@ migration('turn_player_facts_scene_session_nullable', () => {
 // migration: emails 加 character_id 列（男主来信关联发件角色）
 migration('emails_character_id', () => db.exec('ALTER TABLE emails ADD COLUMN character_id TEXT'));
 
+// migration: scene_locations 加 lot_count 列（位面住宅区切成 N 格展示，0=普通地点）
+migration('scene_locations_lot_count', () => db.exec('ALTER TABLE scene_locations ADD COLUMN lot_count INTEGER NOT NULL DEFAULT 0'));
+
+// ── NPC 任务（邀请任务）────────────────────────────────
+// migration: missions 加 solo_complete_at 列（玩家拒绝后 NPC 独自完成的时刻，接受分支为 NULL）
+migration('missions_solo_complete_at', () => db.exec('ALTER TABLE missions ADD COLUMN solo_complete_at INTEGER'));
+
+// migration: relationships 加 last_task_invite_day 列（该 NPC 今天已发过任务邀请的北京日 key）
+migration('relationships_last_task_invite', () => db.exec('ALTER TABLE relationships ADD COLUMN last_task_invite_day TEXT'));
+
+// migration: moments 加 visibility / visible_to 列（朋友圈「给谁看」可见性）
+migration('moments_visibility', () => {
+  db.exec("ALTER TABLE moments ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'");
+  db.exec("ALTER TABLE moments ADD COLUMN visible_to TEXT NOT NULL DEFAULT '[]'");
+});
+
 // 写入默认设置
 const insertSetting = db.prepare(
   'INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)',

@@ -286,6 +286,168 @@
   color-scheme: light;
 }
 
+/* === 心动水彩（v3 默认，浅蓝水彩 + 白色毛玻璃） === */
+[data-theme="watercolor"] {
+  --ink: #dfe7f5;
+  --ink-2: #d5e0f2;
+  --panel: #ffffff;
+  --panel-2: #eef2fa;
+  --border: #c2d0e8;
+  --border-soft: #d6e0f0;
+  --border-bright: #a8bce0;
+  --glass-edge: rgba(255,255,255,0.85);
+  --text: #1c2440;
+  --text-dim: #2c3550;
+  --text-mute: #3d4a66;
+  --amber: #d9a63a;
+  --amber-dim: #a87c20;
+  --cyan: #5b7fd6;
+  --rose: #d97a9a;
+  --sage: #6aa98a;
+  --ember: #d66878;
+  --plum: #9a7cd6;
+  --accent: #5b7fd6;
+  --accent-2: #d9a63a;
+  --player-bubble-bg: rgba(91,127,214,0.32);
+  --player-bubble-border: rgba(91,127,214,0.42);
+  --npc-bubble-bg: rgba(255,255,255,0.9);
+  --npc-bubble-border: #d6e0f0;
+  --bg-glow-1: rgba(110,145,225,0.25);
+  --bg-glow-2: rgba(170,135,225,0.2);
+  --phone-bg: #dfe7f5;
+  --phone-border: #3d4a66;
+  --phone-inset: #ffffff;
+  --boot-bg: #dfe7f5;
+  --scrollbar-thumb: rgba(90,110,160,0.2);
+  --shadow: 0 24px 60px rgba(40,55,100,0.35);
+  --shadow-sm: 0 8px 22px rgba(50,70,140,0.14);
+  /* 磁贴：白色毛玻璃 squircle */
+  --tile-cyan-c1: #e6edfb;  --tile-cyan-c2: #d5e0f5;  --tile-cyan-bd: rgba(91,127,214,0.35);
+  --tile-amber-c1: #f6ecdc; --tile-amber-c2: #eadcc4; --tile-amber-bd: rgba(217,166,58,0.35);
+  --tile-rose-c1: #f6e6ee;  --tile-rose-c2: #ead6e2;  --tile-rose-bd: rgba(217,122,154,0.35);
+  --tile-sage-c1: #e4f2e8;  --tile-sage-c2: #d2e6d8;  --tile-sage-bd: rgba(106,169,138,0.35);
+  --tile-plum-c1: #ece6f6;  --tile-plum-c2: #dcd2ea;  --tile-plum-bd: rgba(154,124,214,0.35);
+  --tile-ember-c1: #f6e6e8; --tile-ember-c2: #ead6da; --tile-ember-bd: rgba(214,104,120,0.35);
+  --card-bg: rgba(255,255,255,0.6);
+  --card-bg-hover: rgba(255,255,255,0.75);
+  --card-bg-alt: rgba(255,255,255,0.48);
+  --card-bg-strong: rgba(255,255,255,0.8);
+  --btn-bg: rgba(255,255,255,0.55);
+  --btn-bg-hover: rgba(255,255,255,0.7);
+  --overlay-bg: rgba(223,231,245,0.7);
+  --overlay-bg-hover: rgba(223,231,245,0.85);
+  --bg-overlay: rgba(223,231,245,0.35);
+  color-scheme: light;
+}
+
+/* 水彩浅色下：首页卡片去灰（暗色硬阴影→柔和浅蓝），widget 参考男主卡片大圆角 */
+[data-theme="watercolor"] .id-widget { border-radius: 28px; box-shadow: var(--shadow-sm); }
+[data-theme="watercolor"] .id-home-grid { margin-top: 28px; padding: 0 26px; }
+[data-theme="watercolor"] .id-app-tile { box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.5); }
+[data-theme="watercolor"] .id-friend-card { box-shadow: var(--shadow-sm); }
+[data-theme="watercolor"] .id-div-card { box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.5); }
+/* 三块卡白底对齐图标方块（75% 不透明），别比图标更实 */
+[data-theme="watercolor"] .id-widget,
+[data-theme="watercolor"] .id-friend-card,
+[data-theme="watercolor"] .id-div-card {
+  background: rgba(255, 255, 255, 0.75);
+}
+/* 朋友圈卡片加白色毛玻璃：卡片原本透明，字浮在壁纸上不清 */
+[data-theme="watercolor"] .id-moment-card {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+/* 任务卡片加白色毛玻璃：active 原本淡蓝近乎透明，字看不清 */
+[data-theme="watercolor"] .id-mission-card {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+[data-theme="watercolor"] .id-mission-card.active {
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(93, 173, 226, 0.4);
+}
+/* 剧本卡片 + 邮件列表也加白色毛玻璃，壁纸上字看不清 */
+[data-theme="watercolor"] .id-scenario-card {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+[data-theme="watercolor"] .id-scenario-active-banner {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+[data-theme="watercolor"] .id-email-list {
+  margin: 0.8rem;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+[data-theme="watercolor"] .id-email-detail {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+[data-theme="watercolor"] .id-moment-compose {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+/* 应用页顶部栏（← + 标题）浮在白色渐变高光（z-index 10）上方，不被白色盖住；状态栏 z-index 50 仍在最上 */
+[data-theme="watercolor"] .id-appbar {
+  z-index: 20;
+}
+
+/* 水彩下手机外壳：外层 slate-950 深色桌面 + 自适应比例（继承 v2 的 9/19.5 比例与断点）+ 7px 深色边框 + 48px 圆角 + 大阴影 */
+[data-theme="watercolor"] .id-phone-wrap {
+  background: #020617;
+  align-items: center;
+  overflow-y: auto;
+}
+[data-theme="watercolor"] .id-phone-device {
+  border-width: 7px;
+  border-color: #1e293b;
+  border-radius: 48px;
+  box-shadow: 0 25px 60px -15px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.12);
+}
+/* 移动端（≤540px，与 v2 一致）全屏无边框 */
+@media (max-width: 540px) {
+  [data-theme="watercolor"] .id-phone-device {
+    width: 100%;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+/* 平板（≤859px，与 v2 一致）撑满高度，不垂直居中 */
+@media (max-width: 859px) {
+  [data-theme="watercolor"] .id-phone-wrap {
+    align-items: stretch;
+  }
+}
+[data-theme="watercolor"] .id-phone-device.has-home-bg {
+  background-image: linear-gradient(var(--bg-overlay), var(--bg-overlay)), var(--home-bg-image);
+  background-size: cover;
+  background-position: center;
+}
+[data-theme="watercolor"] .id-phone-device.has-home-bg .id-screen {
+  background: transparent;
+}
+/* 水彩下壁纸铺在外壳上，首页容器透明透出（否则 phone-bg 盖住壁纸） */
+[data-theme="watercolor"] .id-home-screen.has-home-bg {
+  background: transparent;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
 html, body { overflow-x: hidden; overflow-x: clip; }
@@ -361,17 +523,188 @@ body {
 .id-batt-fill { flex: 0 0 72%; border-radius: 1px; background: var(--sage); }
 .id-batt-cap { width: 2px; height: 5px; border-radius: 0 1px 1px 0; background: var(--text-mute); }
 
+/* 顶部白色到透明渐变（照抄心动终端顶部高光） */
+.id-statusbar-fade {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 96px;
+  background: linear-gradient(to bottom, #fff 30%, rgba(255,255,255,0.75) 70%, transparent);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* 水彩下状态栏照抄心动终端：深灰 #2d3139，时间 13px，信号条 + Wifi + 100% + 电池 */
+[data-theme="watercolor"] .id-statusbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  padding: 14px 24px 4px;
+  color: #2d3139;
+  pointer-events: none;
+  font-family: inherit;
+}
+[data-theme="watercolor"] .id-statusbar-time {
+  font-size: 13px;
+  font-weight: 400;
+  color: #2d3139;
+  letter-spacing: 0;
+}
+[data-theme="watercolor"] .id-statusbar-right { gap: 8px; }
+[data-theme="watercolor"] .id-signal { gap: 1.5px; height: 12px; padding-bottom: 2px; }
+[data-theme="watercolor"] .id-signal i { width: 2px; background: #2d3139; }
+[data-theme="watercolor"] .id-signal i:nth-child(1) { height: 3px; }
+[data-theme="watercolor"] .id-signal i:nth-child(2) { height: 5px; }
+[data-theme="watercolor"] .id-signal i:nth-child(3) { height: 7px; }
+[data-theme="watercolor"] .id-signal i:nth-child(4) { height: 9px; background: #2d3139; }
+[data-theme="watercolor"] .id-wifi { color: #2d3139; }
+[data-theme="watercolor"] .id-batt-pct { font-size: 12.5px; color: #2d3139; letter-spacing: 0; }
+[data-theme="watercolor"] .id-batt { gap: 1px; }
+[data-theme="watercolor"] .id-batt-body { width: 19px; height: 10px; border: 1.2px solid #2d3139; border-radius: 3px; padding: 1px; }
+[data-theme="watercolor"] .id-batt-fill { flex: 0 0 100%; border-radius: 1px; background: #2d3139; }
+[data-theme="watercolor"] .id-batt-cap { width: 1.5px; height: 4px; border-radius: 0 1px 1px 0; background: #2d3139; }
+
 /* 屏幕 */
-.id-screen { position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.id-screen {
+  position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  /* 屏幕背景 = 玩家选的桌面壁纸（无壁纸时回退主题底色） */
+  background-color: var(--phone-bg);
+}
+.id-screen.has-home-bg {
+  background-image: linear-gradient(var(--bg-overlay), var(--bg-overlay)), var(--home-bg-image);
+  background-size: cover;
+  background-position: center;
+}
+/* 水彩下屏幕顶部让位给绝对定位状态栏（照抄心动终端内容容器 pt-9） */
+[data-theme="watercolor"] .id-screen {
+  padding-top: 36px;
+}
 
 /* Home 键 */
 .id-homebtn {
-  flex-shrink: 0; width: 36px; height: 36px; margin: 6px auto 8px;
+  flex-shrink: 0; width: 32px; height: 32px; margin: 3px auto 4px;
   border-radius: 50%; border: 2px solid var(--text-mute); background: transparent;
   cursor: pointer; transition: all 0.15s;
 }
 .id-homebtn:hover { border-color: var(--text-dim); }
 .id-homebtn:active { transform: scale(0.92); }
+
+/* Dock（v3 全局底部导航，替代圆形 Home 键） */
+.id-dock {
+  flex-shrink: 0;
+  margin: 6px 14px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 32px;
+  border: 1px solid var(--glass-edge);
+  background: color-mix(in srgb, var(--card-bg-strong) 55%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: var(--shadow-sm);
+}
+.id-dock-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-mute);
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  transition: color 0.15s, transform 0.15s;
+}
+.id-dock-item:active { transform: scale(0.94); }
+.id-dock-item.is-active { color: var(--cyan); }
+
+/* 桌面图标网格（v3 单页 4 列，真图标无灰格，margin-top:auto 推到底部 dock 上方） */
+.id-app-grid {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px 2px;
+  padding: 10px 18px 8px;
+  margin-top: auto;
+}
+/* v3 首页顶部小组件容器：与男主卡片一致的顶部间距，浮在白色渐变高光上方 */
+.id-home-widget-wrap {
+  flex-shrink: 0;
+  margin-top: 28px;
+  position: relative;
+  z-index: 30;
+}
+/* === v3 首页男主卡片（照抄心动终端 HomeScreen 顶部卡） === */
+.id-hero-card {
+  position: relative;
+  z-index: 30;
+  width: 100%;
+  flex-shrink: 0;
+  margin-top: 28px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 32px;
+  padding: 25px 20px;
+  box-shadow: 0 12px 32px rgba(30, 64, 175, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.id-hero-card:hover { background: rgba(255, 255, 255, 0.95); }
+.id-hero-status {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  font-size: 12px;
+  font-weight: 500;
+  color: #475569;
+}
+.id-hero-status-heart { fill: #ea1e6b; color: #ea1e6b; flex-shrink: 0; }
+.id-hero-row { display: flex; align-items: center; gap: 14px; }
+.id-hero-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  background: #fff;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #64748b;
+}
+.id-hero-avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.id-hero-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.id-hero-name { font-size: 1.35rem; font-weight: 700; color: #1e293b; letter-spacing: -0.01em; line-height: 1.2; }
+.id-hero-location { display: flex; align-items: center; gap: 4px; font-size: 0.75rem; font-weight: 500; color: #475569; margin-top: 3px; }
+.id-hero-pin { color: #3b82f6; flex-shrink: 0; }
+.id-hero-spacer { flex: 1; }
+
+/* 水彩下图标方块照抄心动终端：白色毛玻璃 18px 圆角 + 白边 + 柔和阴影 */
+[data-theme="watercolor"] .id-app-tile {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04), inset 0 1px 1px rgba(255, 255, 255, 0.9);
+}
 
 /* === 开机引导 === */
 .id-boot {
@@ -427,7 +760,7 @@ body {
 
 /* === 手机桌面 === */
 .id-home-screen {
-  flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0.6rem 1rem 1rem;
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0.4rem 1rem 0.5rem;
   /* 默认背景：主题色光晕渐变（无自定义背景图时随主题变色） */
   background:
     radial-gradient(120% 62% at 50% -12%, var(--bg-glow-1), transparent 62%),
@@ -443,6 +776,15 @@ body {
   background-position: center;
 }
 
+/* 首页小组件网格：以 APP 图标为基准（4 列 1fr + 行高 = 图标 tile + 行距） */
+.id-home-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 64px; /* 图标 tile 52px + 行 gap 12px */
+  gap: 12px 8px;        /* 行 12px 列 8px，与图标区 .id-app-page 一致 */
+  margin-bottom: 0.2rem;
+}
+
 /* App 图标：分两页横滑（每页 4 列）+ 底部圆点指示 */
 .id-app-pages {
   display: flex;
@@ -450,37 +792,48 @@ body {
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
   margin-top: auto;
+  flex-shrink: 0;
 }
 .id-app-pages::-webkit-scrollbar { display: none; }
 .id-app-page {
   flex: 0 0 100%;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px 8px;
+  gap: 12px 8px;
   scroll-snap-align: start;
-  padding: 0.5rem 0;
+  padding: 0.2rem 0;
 }
 .id-app-dots {
   display: flex;
   justify-content: center;
   gap: 6px;
-  padding: 0 0 0.35rem;
+  padding: 0 0 0.1rem;
 }
-.id-app-dots span {
+.id-app-dot {
+  position: relative;
   width: 6px;
   height: 6px;
+  padding: 0;
+  border: none;
   border-radius: 50%;
   background: var(--border-bright);
+  cursor: pointer;
   transition: all 0.2s;
 }
-.id-app-dots span.is-active {
+/* 扩大点击热区（桌面鼠标友好），视觉大小不变 */
+.id-app-dot::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+.id-app-dot.is-active {
   width: 16px;
   border-radius: 3px;
   background: var(--accent);
 }
 
 .id-app-icon {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
   background: none; border: none; cursor: pointer; transition: all 0.15s; font-family: inherit;
 }
 .id-app-icon:active { transform: scale(0.92); }
@@ -495,7 +848,6 @@ body {
   border: 1px solid var(--glass-edge);
   box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.08);
 }
-@media (min-width: 600px) { .id-app-tile { width: 60px; height: 60px; font-size: 1.8rem; border-radius: 16px; } }
 .id-app-label { font-size: 0.65rem; color: var(--text-dim); text-align: center; line-height: 1.2; }
 .id-app-badge {
   position: absolute; top: -4px; right: -4px;
@@ -586,6 +938,13 @@ body {
 }
 .id-sms-invite-btn:hover { opacity: 0.85; }
 .id-sms-invite-btn:disabled { opacity: 0.4; cursor: default; }
+
+.id-sms-delayed-hint {
+  font-size: 0.72rem;
+  color: var(--text-mute);
+  text-align: center;
+  margin: 0.4rem 0;
+}
 
 /* === 按钮 === */
 .id-btn { padding: 0.5rem 1rem; background: var(--btn-bg); border: 1px solid var(--border-bright); border-radius: var(--radius-sm); color: var(--text); font-size: 0.85rem; cursor: pointer; transition: all 0.15s; font-family: inherit; }
@@ -1033,25 +1392,27 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 
 /* === 桌面 Widget === */
 .id-widget {
+  grid-column: 1 / -1;  /* 占满 4 列 */
+  grid-row: span 2;     /* 占 2 行 */
   background: var(--card-bg-strong); border: 1px solid var(--glass-edge);
   border-radius: 16px; padding: 0.8rem 1rem; cursor: pointer;
-  transition: all 0.15s; margin-bottom: 0.8rem;
-  height: 104px; display: flex; flex-direction: column; justify-content: center;
+  transition: all 0.15s;
+  display: flex; flex-direction: column; justify-content: center;
   backdrop-filter: blur(14px) saturate(1.4);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
 }
 .id-widget:active { transform: scale(0.97); }
-.id-widget-label { font-size: 0.68rem; color: var(--text-mute); margin-bottom: 0.2rem; }
-.id-widget-title { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.id-widget-label { font-size: 0.85rem; color: var(--text-mute); margin-bottom: 0.25rem; }
+.id-widget-title { font-size: 1.3rem; font-weight: 600; color: var(--text); }
 .id-widget-title-row { display: flex; align-items: center; gap: 0.6rem; }
 .id-widget-avatar {
-  width: 2.2rem; height: 2.2rem; border-radius: 50%; flex-shrink: 0;
+  width: 3.5rem; height: 3.5rem; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  font-size: 0.85rem; font-weight: 600; color: var(--text-mute);
+  font-size: 1.15rem; font-weight: 600; color: var(--text-mute);
   background: rgba(120,160,200,0.15);
 }
 .id-widget-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
-.id-widget-hint { font-size: 0.72rem; color: var(--cyan); margin-top: 0.3rem; }
+.id-widget-hint { font-size: 0.9rem; color: var(--cyan); margin-top: 0.35rem; }
 
 /* 默认时钟 widget：柔和彩色渐变底（跟随主题），大字时间 */
 .id-widget-clock {
@@ -1122,6 +1483,13 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 }
 .id-fade-boot {
   animation: id-fade-in 0.4s ease-out;
+}
+/* v3 登录页：撑满屏幕高度，让 id-boot 的 flex:1 生效（避免登录页只占半屏） */
+.id-fade-boot-v3 {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* === 模态弹窗 === */
@@ -2641,7 +3009,8 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 
 /* 好友条：方形横滑（头像铺满作背景 + 底部文字蒙版），占一半宽 */
 .id-friend-rail {
-  aspect-ratio: 1;
+  grid-column: span 2;  /* 占 2 列 */
+  grid-row: span 2;     /* 占 2 行 */
   min-width: 0;
   display: flex;
   overflow-x: auto;
@@ -2654,7 +3023,6 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
   position: relative;
   flex: 0 0 100%;
   scroll-snap-align: start;
-  aspect-ratio: 1;
   padding: 0;
   overflow: hidden;
   border-radius: 14px;
@@ -2733,8 +3101,8 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 /* 卦象卡：方形（与头像等高，占一半宽） */
 .id-div-card {
   position: relative;
-  flex: 1 1 0;
-  aspect-ratio: 1;
+  grid-column: span 2;  /* 占 2 列 */
+  grid-row: span 2;     /* 占 2 行 */
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2782,11 +3150,11 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 }
 
 .id-div-card-hex { width: 100%; display: flex; justify-content: center; }
-.id-div-card .id-divine-yaos { gap: 0.5rem; }
-.id-div-card .id-yao-bar { width: 120px; height: 16px; }
+.id-div-card .id-divine-yaos { gap: 0.25rem; }
+.id-div-card .id-yao-bar { width: 120px; height: 12px; }
 .id-div-card .id-yao-bar.is-yang .id-yao-seg { width: 120px; }
 .id-div-card .id-yao-bar.is-yin .id-yao-seg { width: 55px; }
-.id-div-card .id-yao-seg { height: 12px; border-radius: 6px; }
+.id-div-card .id-yao-seg { height: 10px; border-radius: 5px; }
 
 /* 半透明占位爻（未成卦时的抛硬币背景） */
 .id-yao-bar.is-pending { opacity: 0.2; }
@@ -2816,11 +3184,11 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
 
 /* 桌面：卦象卡子元素恢复饱满（置于文件末尾，覆盖前文手机紧凑样式） */
 @media (min-width: 600px) {
-  .id-div-card .id-divine-yaos { gap: 0.625rem; }
-  .id-div-card .id-yao-bar { width: 190px; height: 20px; }
+  .id-div-card .id-divine-yaos { gap: 0.3rem; }
+  .id-div-card .id-yao-bar { width: 190px; height: 14px; }
   .id-div-card .id-yao-bar.is-yang .id-yao-seg { width: 190px; }
   .id-div-card .id-yao-bar.is-yin .id-yao-seg { width: 90px; }
-  .id-div-card .id-yao-seg { height: 16px; border-radius: 8px; }
+  .id-div-card .id-yao-seg { height: 12px; border-radius: 6px; }
   .id-div-card .id-coin-sm { width: 56px; height: 56px; }
   .id-div-card .id-coin-sm .id-coin-hole { width: 15px; height: 15px; }
   .id-div-card-sub { font-size: 1rem; }
@@ -2844,4 +3212,262 @@ button.id-map-npc-tag:active { filter: brightness(0.9); }
   inset: 0;
   margin: 0;
   z-index: 2;
+}
+
+/* ── 可视化地图（SceneMapViz）────────────────────────────── */
+.scv-toggle {
+  background: var(--card-bg-strong);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.scv-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  padding: 0 0.2rem 0.5rem;
+}
+.scv-crumb {
+  background: none;
+  border: none;
+  padding: 0.1rem 0.3rem;
+  color: var(--text-mute);
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.scv-crumb:hover { color: var(--text); }
+.scv-crumb-cur { color: var(--accent); font-weight: 600; }
+.scv-crumb-sep { color: var(--text-dim); }
+.scv-stage { padding: 0; margin: -0.8rem -0.8rem 0; }
+/* 地图图形页背景与列表页对齐：用默认内容背景，不再铺主题壁纸 */
+.scv-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.scv-cell { cursor: pointer; }
+.scv-label-bg {
+  fill: var(--card-bg-strong);
+  stroke: none;
+  pointer-events: none;
+}
+.scv-label-bg.scv-label-sel { stroke: var(--accent); stroke-width: 1.5; }
+.scv-label-text {
+  fill: var(--text);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.scv-label-text.scv-label-sel { fill: var(--accent); }
+.scv-info {
+  margin: 0.6rem;
+  padding: 0.85rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+}
+.scv-info-name { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+.scv-info-actions { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+.scv-enter-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scv-explore-btn {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scv-info-desc { font-size: 0.85rem; color: var(--text-mute); margin-top: 0.35rem; }
+.scv-info-hint { font-size: 0.85rem; color: var(--text-mute); text-align: center; padding: 0.2rem 0; }
+/* 列表地图里选中的地点卡片高亮 */
+.scv-card-sel {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* === 好友页（v3）=== */
+.id-friends-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  align-items: center;
+}
+.id-friends-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(93, 173, 226, 0.3);
+  border-radius: 20px;
+  padding: 0.45rem 0.7rem;
+}
+.id-friends-search svg { color: var(--text-mute); flex-shrink: 0; }
+.id-friends-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 0.85rem;
+  color: var(--text);
+  font-family: inherit;
+  min-width: 0;
+}
+.id-friends-search input::placeholder { color: var(--text-mute); }
+.id-friends-new {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--cyan);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.id-friends-new:active { transform: scale(0.96); }
+
+.id-friends-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem 0.8rem;
+  padding: 0.6rem 0.7rem;
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(93, 173, 226, 0.3);
+  border-radius: 14px;
+}
+.id-friends-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+}
+.id-friends-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.id-friends-avatar span { font-size: 1.1rem; font-weight: 600; color: var(--accent); }
+.id-friends-body { flex: 1; min-width: 0; }
+.id-friends-name-row { display: flex; align-items: center; gap: 0.4rem; }
+.id-friends-name { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.id-friends-gender {
+  font-size: 0.65rem;
+  color: var(--text-mute);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0 0.25rem;
+  line-height: 1.3;
+}
+.id-friends-bio {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.id-friends-actions {
+  display: flex;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+.id-friends-actions button {
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  background: transparent;
+  color: var(--text-mute);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.id-friends-actions button:hover { background: rgba(93, 173, 226, 0.12); color: var(--cyan); }
+.id-friends-actions button:last-child:hover { background: rgba(224, 122, 130, 0.15); color: var(--ember); }
+
+/* JSON 导入弹窗 */
+.id-import-textarea {
+  width: 100%;
+  min-height: 6rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  resize: vertical;
+  line-height: 1.4;
+}
+.id-import-textarea:focus { outline: none; border-color: var(--cyan); }
+.id-import-file {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--cyan);
+  cursor: pointer;
+}
+.id-import-error {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--ember);
+}
+
+/* 日记页 tab */
+.id-diary-tabs {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 0.8rem;
+}
+.id-diary-tabs button {
+  flex: 1;
+  padding: 0.45rem 0;
+  border-radius: 12px;
+  border: 1px solid var(--border-bright);
+  background: rgba(255,255,255,0.62);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.id-diary-tabs button.active {
+  background: var(--cyan);
+  color: #fff;
+  border-color: var(--cyan);
 }

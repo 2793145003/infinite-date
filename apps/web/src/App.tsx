@@ -326,6 +326,7 @@ export default function App() {
           <SceneMapApp
             onBack={() => setView({ type: 'desktop' })}
             onOpenLocation={(locationId) => setView({ type: 'scene-location', locationId })}
+            onExplore={(locationId, locationName) => setView({ type: 'scene-explore', locationId, locationName })}
           />
         );
         break;

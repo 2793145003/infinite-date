@@ -158,7 +158,7 @@ export async function sceneNamedRoutes(app: FastifyInstance): Promise<void> {
         targetRound = 0;
       } else {
         const last = db.prepare(
-          "SELECT id, round_no FROM scene_messages WHERE scene_session_id = ? AND role != 'player' ORDER BY round_no DESC, created_at DESC LIMIT 1"
+          "SELECT id, round_no FROM scene_messages WHERE scene_session_id = ? AND role = 'player' ORDER BY round_no DESC, created_at DESC LIMIT 1"
         ).get(sessionId) as any;
         if (!last) return reply.code(400).send({ error: '没有可重试的内容' });
         targetRound = last.round_no;
@@ -223,8 +223,8 @@ export async function sceneNamedRoutes(app: FastifyInstance): Promise<void> {
     const session = db.prepare('SELECT * FROM scene_sessions WHERE id = ? AND player_id = ?').get(sessionId, playerId) as any;
     if (!session) return reply.code(404).send({ error: '场景会话不存在' });
     if (session.ended) return reply.send({ ok: true, ended: true });
-    db.prepare('UPDATE scene_sessions SET ended = 1, ended_at = ?, updated_at = ? WHERE id = ?')
-      .run(Date.now(), Date.now(), sessionId);
+    db.prepare('UPDATE scene_sessions SET ended = 1, updated_at = ? WHERE id = ?')
+      .run(Date.now(), sessionId);
 
     // 约会结束收尾：补折记忆 + foldDateSummary + resetEligibleTimer + 朋友圈 + 短信greeting
     endSceneSession(sessionId, playerId).catch(err => {

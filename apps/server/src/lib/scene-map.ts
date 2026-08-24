@@ -40,6 +40,11 @@ export function ensureSceneMap(): void {
   if (!actCol.some(c => c.name === 'background_submitted')) {
     db.exec("ALTER TABLE scene_locations ADD COLUMN background_submitted TEXT NOT NULL DEFAULT '[]'");
   }
+  // 迁移：为旧库的 scene_locations 补 owner_character_id 列（地点归属角色，NULL=公共）
+  //   行程池据此排除「归属别人的领地」，见 docs/OWNER_CHARACTER_MIGRATION.md
+  if (!actCol.some(c => c.name === 'owner_character_id')) {
+    db.exec('ALTER TABLE scene_locations ADD COLUMN owner_character_id TEXT');
+  }
 
   // 首启时复制旧 location_homes → scene_homes（若未复制过）
   const homeCnt = db.prepare('SELECT COUNT(*) as c FROM scene_homes').get() as { c: number };
@@ -75,6 +80,70 @@ export function ensureSceneMap(): void {
       );
     }
   }
+
+  // 数据迁移：回填 owner_character_id（只执行一次，判断 = 是否已有非 NULL owner 标记）
+  const ownerMarked = db.prepare('SELECT COUNT(*) as c FROM scene_locations WHERE owner_character_id IS NOT NULL').get() as { c: number };
+  if (ownerMarked.c === 0) {
+    backfillOwnerCharacterId();
+  }
+}
+
+/** 一次性回填地点归属角色（owner_character_id）。见 docs/OWNER_CHARACTER_MIGRATION.md */
+function backfillOwnerCharacterId(): void {
+  // 角色名 -> 角色 id
+  const charIdByName = new Map<string, string>();
+  for (const r of db.prepare('SELECT id, character_data FROM characters').all() as { id: string; character_data: string }[]) {
+    try {
+      const d = JSON.parse(r.character_data);
+      if (d && typeof d.name === 'string' && d.name) charIdByName.set(d.name, r.id);
+    } catch { /* ignore */ }
+  }
+
+  const setOwner = db.prepare('UPDATE scene_locations SET owner_character_id = ? WHERE id = ? AND owner_character_id IS NULL');
+
+  // 1. 家本身 + 家的子树（递归标记，visited 防环）
+  const homeOwner = new Map<string, string>();
+  for (const r of db.prepare('SELECT location_id, character_id FROM scene_homes').all() as { location_id: string; character_id: string }[]) {
+    homeOwner.set(r.location_id, r.character_id);
+  }
+  const childrenStmt = db.prepare('SELECT id FROM scene_locations WHERE parent_id = ?');
+  const visited = new Set<string>();
+  const walk = (locId: string, ownerId: string) => {
+    if (visited.has(locId)) return;
+    visited.add(locId);
+    setOwner.run(ownerId, locId);
+    for (const c of childrenStmt.all(locId) as { id: string }[]) {
+      walk(c.id, ownerId);
+    }
+  };
+  for (const [homeId, ownerId] of homeOwner) {
+    walk(homeId, ownerId);
+  }
+
+  // 2. 角色专属场所：名字含角色全名
+  const unnamed = db.prepare('SELECT id, name FROM scene_locations WHERE owner_character_id IS NULL').all() as { id: string; name: string }[];
+  for (const r of unnamed) {
+    for (const [cname, cid] of charIdByName) {
+      if (r.name.includes(cname)) {
+        setOwner.run(cid, r.id);
+        break;
+      }
+    }
+  }
+
+  // 3. 手动清单：名字不含角色全名但明确归属
+  const manual: Record<string, string> = {
+    '云枢资本集团总部': '林溯',
+    '厉氏集团': '厉承渊',
+    '厉氏集团地下车库': '厉承渊',
+    '顾氏集团总部': '顾珩',
+    '异能局专属外勤驻馆（烬戍馆）': '苏烬',
+  };
+  for (const [name, cname] of Object.entries(manual)) {
+    const cid = charIdByName.get(cname);
+    if (!cid) continue;
+    db.prepare('UPDATE scene_locations SET owner_character_id = ? WHERE name = ? AND owner_character_id IS NULL').run(cid, name);
+  }
 }
 
 /** 场景路人：某地点的在场 NPC（公共工具人，属地点属性）。自带 id，可被场景引用归属发言 */
@@ -89,16 +158,21 @@ export interface SceneNpc {
   clues?: string[];
 }
 
+/** 解析地点的 npcs JSON（兼容旧数据：无 id 的路人补一个）。批量场景直接复用，避免逐地点回查库。 */
+export function parseSceneNpcs(npcsJson: string): SceneNpc[] {
+  try {
+    const list = JSON.parse(npcsJson);
+    // 兼容旧数据：无 id 的路人补一个
+    return list.map((n: any) => n.id ? n : { ...n, id: crypto.randomUUID() });
+  } catch { return []; }
+}
+
 /** 读取某地点的路人列表 */
 export function getNpcs(locationId: string): SceneNpc[] {
   ensureSceneMap();
   const row = db.prepare('SELECT npcs FROM scene_locations WHERE id = ?').get(locationId) as { npcs: string } | undefined;
   if (!row) return [];
-  try {
-    const list = JSON.parse(row.npcs);
-    // 兼容旧数据：无 id 的路人补一个
-    return list.map((n: any) => n.id ? n : { ...n, id: crypto.randomUUID() });
-  } catch { return []; }
+  return parseSceneNpcs(row.npcs);
 }
 
 /** 更新某地点的单个路人（按 id 定位，保留原 id）。只应用显式提供的字段（undefined 跳过）。返回更新后的列表。 */

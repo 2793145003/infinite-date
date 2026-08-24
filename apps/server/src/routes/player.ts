@@ -16,14 +16,14 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
 
-    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, tutorial_step, rating_score FROM players WHERE id = ?').get(playerId) as {
-      id: string; name: string; pronouns: string; gender: string; appearance: string; tutorial_step: number; rating_score: number;
+    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, tutorial_step, rating_score, is_admin FROM players WHERE id = ?').get(playerId) as {
+      id: string; name: string; pronouns: string; gender: string; appearance: string; tutorial_step: number; rating_score: number; is_admin: number;
     };
 
     const perm = db.prepare('SELECT balance FROM player_permissions WHERE player_id = ?').get(playerId) as { balance: number } | undefined;
 
     return reply.send({
-      player,
+      player: { ...player, is_admin: !!player.is_admin },
       permissions: perm?.balance ?? 0,
     });
   });
@@ -279,6 +279,24 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const now = Date.now();
+
+    // 任务中（active 一起做 / solo 独自做且未到期）→ 行程显示「任务中」，不报主城行程
+    // （与 getNpcOnlineState 的 mission 判定一致，避免短信说「任务中」、主页行程却报主城的割裂）
+    const inMission = db.prepare(`
+      SELECT 1 FROM missions
+      WHERE player_id = ? AND quest_type = 'npc' AND assignee_id = ?
+        AND (status = 'active' OR (status = 'solo' AND solo_complete_at > ?))
+      LIMIT 1
+    `).get(playerId, characterId, now);
+    if (inMission) {
+      return reply.send({
+        characterId,
+        characterName: charData.name ?? '未知',
+        current: { locationId: '', locationName: '任务中', activity: '', startTime: now, duration: 0 },
+        upcoming: [],
+      });
+    }
+
     const upcoming = getUpcomingSchedule(playerId, characterId, charData, now, 6);
 
     return reply.send({

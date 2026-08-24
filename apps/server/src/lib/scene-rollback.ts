@@ -133,6 +133,22 @@ export function captureRoundSnapshot(playerId: string, sessionId: string, roundN
 function deleteAppendedRows(sessionId: string, targetRound: number, keepPlayerMessage = false): void {
   // 1) 台词：删掉 targetRound 起的非玩家消息（重试保留本轮玩家发言，只重生成 NPC/旁白回复），
   //    以及更后面（round_no > targetRound）的全部消息。
+  //    先取出将删消息 id 联删它们的 scene_message embedding——否则已撤回的对话仍会被
+  //    retrieveMemoriesMultiChannel 语义检索回来（它对 scene_message 不做 scene_messages 存在性校验）。
+  const msgRows = keepPlayerMessage
+    ? db.prepare(
+        "SELECT id FROM scene_messages WHERE scene_session_id = ? AND (round_no > ? OR (round_no = ? AND role != 'player'))"
+      ).all(sessionId, targetRound, targetRound) as { id: string }[]
+    : db.prepare(
+        'SELECT id FROM scene_messages WHERE scene_session_id = ? AND round_no >= ?'
+      ).all(sessionId, targetRound) as { id: string }[];
+
+  if (msgRows.length) {
+    db.prepare(
+      `DELETE FROM memory_embeddings WHERE source_type = 'scene_message' AND source_id IN (${msgRows.map(() => '?').join(',')})`
+    ).run(...msgRows.map(r => r.id));
+  }
+
   if (keepPlayerMessage) {
     db.prepare(
       "DELETE FROM scene_messages WHERE scene_session_id = ? AND (round_no > ? OR (round_no = ? AND role != 'player'))"
@@ -175,6 +191,14 @@ function deleteAppendedRows(sessionId: string, targetRound: number, keepPlayerMe
 
 /** 删掉本场【所有】追加型记忆（整场删除用；含 overview/date_summary 全部） */
 function deleteAllAppendedRows(sessionId: string): void {
+  // 台词：先取本场全部消息 id 联删 scene_message embedding，再删行（否则已删对话仍可被语义检索）
+  const msgRows = db.prepare('SELECT id FROM scene_messages WHERE scene_session_id = ?')
+    .all(sessionId) as { id: string }[];
+  if (msgRows.length) {
+    db.prepare(
+      `DELETE FROM memory_embeddings WHERE source_type = 'scene_message' AND source_id IN (${msgRows.map(() => '?').join(',')})`
+    ).run(...msgRows.map(r => r.id));
+  }
   db.prepare('DELETE FROM scene_messages WHERE scene_session_id = ?').run(sessionId);
 
   // turn_player_facts + 它们的 embedding

@@ -3,6 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <script>
+    // v2/v3 已归档，主入口统一为 v4。所有非反代路径（/、/v3、旧 UI 内部路由等）都转接 /v4；
+    // /v4、/api、/dsh 是反代路径，放行。
+    (function () {
+      var p = window.location.pathname;
+      if (!p.startsWith('/v4') && !p.startsWith('/api') && !p.startsWith('/dsh')) {
+        window.location.replace('/v4');
+      }
+    })();
+  </script>
   <title>无限心动</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }

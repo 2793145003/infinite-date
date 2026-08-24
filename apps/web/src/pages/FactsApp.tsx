@@ -14,7 +14,7 @@ interface FactItem {
 
 type Tab = 'new' | 'legacy';
 
-export function FactsApp({ onBack }: { onBack: () => void }) {
+export function FactsApp({ onBack, embedded }: { onBack: () => void; embedded?: boolean }) {
   const [tab, setTab] = useState<Tab>('new');
   const [facts, setFacts] = useState<FactItem[]>([]);
   const [legacyFacts, setLegacyFacts] = useState<FactItem[]>([]);
@@ -119,15 +119,17 @@ export function FactsApp({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="id-app">
-      <div className="id-appbar">
-        <button className="id-appbar-back" onClick={onBack}>←</button>
-        <span className="id-appbar-title">🧠 记忆</span>
-        {tab === 'new' && (
-          <button className="id-btn sm" style={{ marginRight: '0.3rem' }} onClick={() => setAdding(!adding)}>
-            {adding ? '取消' : '＋ 添加'}
-          </button>
-        )}
-      </div>
+      {!embedded && (
+        <div className="id-appbar">
+          <button className="id-appbar-back" onClick={onBack}>←</button>
+          <span className="id-appbar-title">🧠 记忆</span>
+          {tab === 'new' && (
+            <button className="id-btn sm" style={{ marginRight: '0.3rem' }} onClick={() => setAdding(!adding)}>
+              {adding ? '取消' : '＋ 添加'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 页签：新记忆（可编辑）/ 旧记忆（只读折叠） */}
       <div style={{ display: 'flex', gap: '0.4rem', padding: '0.4rem 0.6rem' }}>
@@ -145,6 +147,11 @@ export function FactsApp({ onBack }: { onBack: () => void }) {
         >
           🗂 旧记忆（{legacyFacts.length}）
         </button>
+        {embedded && tab === 'new' && (
+          <button className="id-btn sm primary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.5rem' }} onClick={() => setAdding(!adding)}>
+            {adding ? '取消' : '＋'}
+          </button>
+        )}
       </div>
 
       <div className="id-app-scroll">

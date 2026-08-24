@@ -389,6 +389,8 @@ CREATE TABLE IF NOT EXISTS moments (
   mood          TEXT NOT NULL DEFAULT '',  -- NPC发帖时的心情标签（可选，如"开心""若有所思"）
   location_name TEXT NOT NULL DEFAULT '',  -- 发帖时的位置（可选）
   trigger_type  TEXT NOT NULL DEFAULT 'player',  -- 发帖触发原因
+  visibility    TEXT NOT NULL DEFAULT 'public',  -- 可见性：public=全部公开 / partner=仅彼此可见 / friends=部分好友可见 / private=私密
+  visible_to    TEXT NOT NULL DEFAULT '[]',  -- 可见对象（character_id 的 JSON 数组；public/private 时为空数组）
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_moments_feed ON moments(player_id, created_at);

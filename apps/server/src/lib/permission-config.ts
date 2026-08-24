@@ -15,6 +15,10 @@ interface PermissionCosts {
   mission_obsession_bonus: number;
   mission_coop_bonus: { poor: number; decent: number; excellent: number };
 
+  // NPC 邀请任务奖励（合作收益显著高 / solo 独获极少，体现「跟玩家一起才赚得多」）
+  npc_mission_coop_reward: number;
+  npc_mission_solo_reward: number;
+
   // 消耗
   create_public_npc: number;
   create_private_npc: number;
@@ -42,6 +46,8 @@ const DEFAULT_COSTS: PermissionCosts = {
   mission_base_reward: 50,
   mission_obsession_bonus: 30,
   mission_coop_bonus: { poor: 10, decent: 25, excellent: 50 },
+  npc_mission_coop_reward: 20,
+  npc_mission_solo_reward: 5,
   create_public_npc: 20,
   create_private_npc: 10,
   override: 5,

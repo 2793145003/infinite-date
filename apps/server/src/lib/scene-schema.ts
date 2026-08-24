@@ -36,6 +36,8 @@ export const SCENE_SCHEMA_SQL = `
     activities            TEXT NOT NULL DEFAULT '[]',
     background_image      TEXT,
     background_submitted  TEXT NOT NULL DEFAULT '[]',
+    lot_count             INTEGER NOT NULL DEFAULT 0,
+    owner_character_id    TEXT,
     updated_at            INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_scene_locations_world ON scene_locations(world_id);

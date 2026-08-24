@@ -829,17 +829,21 @@ ${backgroundParts || '未指定'}
     if (name.trim().length > 30) return reply.code(400).send({ error: '地点名称不能超过30字' });
 
     let validParentId: string | null = null;
+    let parentIsPublic: number | null = null;
     if (parentId) {
-      const parent = db.prepare('SELECT id FROM scene_locations WHERE id = ?').get(parentId);
+      const parent = db.prepare('SELECT id, is_public FROM scene_locations WHERE id = ?').get(parentId) as { id: string; is_public: number } | undefined;
       if (!parent) return reply.code(404).send({ error: '父地点不存在' });
       validParentId = parentId;
+      parentIsPublic = parent.is_public;
     }
 
     const id = genId();
     const ts = now();
+    // 显式传 isPublic → 用显式值；未传 → 继承父级（父私有则私有，父公开/无父则公开）
+    const isPub = isPublic !== undefined ? (isPublic ? 1 : 0) : (parentIsPublic ?? 1);
     db.prepare(`INSERT INTO scene_locations (id, world_id, name, summary, creator_type, creator_id, is_public, parent_id, npcs, activities, created_at, updated_at)
       VALUES (?, ?, ?, ?, 'system', NULL, ?, ?, '[]', '[]', ?, ?)`)
-      .run(id, HUB_WORLD_ID, name.trim(), summary?.trim() || '', isPublic !== false ? 1 : 0, validParentId, ts, ts);
+      .run(id, HUB_WORLD_ID, name.trim(), summary?.trim() || '', isPub, validParentId, ts, ts);
     return reply.send({ ok: true, id });
   });
 

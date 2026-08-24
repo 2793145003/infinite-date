@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix Remix Serenity 虚拟角色与记忆空间",
+  "description": "基于 Serene Glass Narrative 风格的治愈系虚拟角色、角色档案管理、情侣日记记忆空间与沉浸式互动约会应用。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

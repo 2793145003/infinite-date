@@ -146,6 +146,9 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
   const [invite, setInvite] = useState<SmsInvite | null>(null);
   const [acceptingInvite, setAcceptingInvite] = useState(false);
   const [quotingMsg, setQuotingMsg] = useState<{ id: string; text: string; senderName: string } | null>(null);
+  const [acceptingTask, setAcceptingTask] = useState(false);
+  const [delayedNotice, setDelayedNotice] = useState<string | null>(null);
+  const [decliningTask, setDecliningTask] = useState(false);
   const [onlineState, setOnlineState] = useState<'online' | 'sleep' | 'mission'>('online');
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -213,6 +216,7 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
     try {
       const data = await api.getMessages(threadId);
       setMessages(data.messages);
+      setDelayedNotice(null);
       setNpcName(data.thread.character_name || '短信');
       setNpcAvatar(data.thread.avatar || null);
       setOnlineState(data.thread.online_state ?? 'online');
@@ -311,6 +315,8 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
       }
       // 收到邀请 → 显示卡片
       setInvite(data.invite ?? null);
+      // 任务中 → 显示「稍后回复」提示（delayed）
+      setDelayedNotice(data.delayed ? '对方正在任务中，稍后回复' : null);
     } catch (err) {
       setMessages(prev => prev.filter(m => m.id !== tempId));
       setInput(text);
@@ -449,6 +455,41 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
       loadMessages();
     } finally {
       setRegeneratingGreeting(false);
+    }
+  };
+
+  const handleAcceptTask = async (missionId: string) => {
+    if (acceptingTask) return;
+    setAcceptingTask(true);
+    try {
+      // NPC 任务同行者 = 邀请 NPC 本人，后端用 assignee_id，companionId 传空
+      const data = await api.acceptMission(missionId, '');
+      onNavigate?.({ type: 'scenario-scene', scenarioSessionId: data.sessionId });
+    } catch (err) {
+      alert((err as Error).message || '接受任务失败');
+    } finally {
+      setAcceptingTask(false);
+    }
+  };
+
+  const handleDeclineTask = async (missionId: string, msgId: string) => {
+    if (decliningTask) return;
+    setDecliningTask(true);
+    try {
+      await api.declineMission(missionId);
+      // 本地移除 task_invite 标记（按钮消失）
+      setMessages(prev => prev.map(m => {
+        if (m.id !== msgId) return m;
+        try {
+          const meta = JSON.parse(m.metadata || '{}');
+          delete meta.task_invite;
+          return { ...m, metadata: JSON.stringify(meta) };
+        } catch { return m; }
+      }));
+    } catch {
+      alert('操作失败');
+    } finally {
+      setDecliningTask(false);
     }
   };
 
@@ -785,8 +826,13 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
             const isLastNpc = msg.sender === 'npc' && !messages.slice(i + 1).some(m => m.sender === 'npc');
             const hasPlayerMessages = messages.some(m => m.sender === 'player');
             let isDream = false;
+            let taskInvite: { missionId: string } | null = null;
             if (msg.sender === 'npc' && msg.metadata) {
-              try { isDream = !!JSON.parse(msg.metadata).dream; } catch { /* ignore */ }
+              try {
+                const meta = JSON.parse(msg.metadata);
+                isDream = !!meta.dream;
+                if (meta.task_invite) taskInvite = meta.task_invite;
+              } catch { /* ignore */ }
             }
             const prevMsg = i > 0 ? messages[i - 1] : null;
             const showTime = !prevMsg || (msg.created_at - prevMsg.created_at > 5 * 60 * 1000);
@@ -827,6 +873,13 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
                   {showInternal === msg.id && <div className="id-internal-text">{msg.internal}</div>}
                 </div>
               )}
+              {taskInvite && (
+                <div className="id-sms-invite-card">
+                  <div className="id-sms-invite-text">邀你一起去做个任务</div>
+                  <button className="id-sms-invite-btn" onClick={() => handleAcceptTask(taskInvite!.missionId)} disabled={acceptingTask || decliningTask}>接受</button>
+                  <button className="id-sms-invite-btn" style={{ background: 'transparent', border: '1px solid rgba(255,200,100,0.35)', color: 'var(--text-dim)' }} onClick={() => handleDeclineTask(taskInvite!.missionId, msg.id)} disabled={acceptingTask || decliningTask}>拒绝</button>
+                </div>
+              )}
               {!creationSession && (
                 <div className="id-bubble-actions">
                   <button className="id-bubble-action-btn" onClick={() => handleCopy(msg.body, msg.id)}>
@@ -850,6 +903,9 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
             </div>
             );
           })
+        )}
+        {delayedNotice && (
+          <div className="id-sms-delayed-hint">{delayedNotice}</div>
         )}
         {(sending || retrying || regeneratingGreeting) && (
           <div className="id-typing-dots"><span /><span /><span /></div>

@@ -19,24 +19,24 @@ import { loadGreetingSection } from '../prompt/loader';
 // ─── retry 路径判定逻辑 ───────────────────────────────
 
 describe('retry 路径判定', () => {
-  // 模拟 scene.ts retry 路由里的判定逻辑
+  // 模拟 scene-named.ts retry 路由里的判定逻辑
   // 核心规则：
   //   - 无玩家发言（撤回后回到开场） → targetRound=0（整场重开）
-  //   - 有玩家发言 → 找最后一个非玩家消息的 round_no，重试该轮
+  //   - 有玩家发言 → 找最后一个玩家消息的 round_no，回退到该轮（保留玩家发言，重生成 AI 回复）
   //   - targetRound=0 时 keepPlayerMessage 无效（全部清空）
   //   - targetRound>0 时 keepPlayerMessage=true（保留玩家发言，只重生成 NPC/旁白）
 
   function determineRetryTarget(
     hasPlayerMessage: boolean,
-    lastNonPlayerRound: number | null,
+    lastPlayerRound: number | null,
   ): { targetRound: number; isRetainPlayerRetry: boolean } {
     if (!hasPlayerMessage) {
       return { targetRound: 0, isRetainPlayerRetry: false };
     }
-    if (lastNonPlayerRound === null || lastNonPlayerRound < 1) {
+    if (lastPlayerRound === null || lastPlayerRound < 1) {
       return { targetRound: 0, isRetainPlayerRetry: false };
     }
-    return { targetRound: lastNonPlayerRound, isRetainPlayerRetry: true };
+    return { targetRound: lastPlayerRound, isRetainPlayerRetry: true };
   }
 
   it('无玩家发言 → 整场重开 (targetRound=0)', () => {
@@ -45,19 +45,19 @@ describe('retry 路径判定', () => {
     assert.equal(result.isRetainPlayerRetry, false);
   });
 
-  it('有玩家发言 + 有NPC回复 → 本轮重试', () => {
+  it('有玩家发言 → 回退到玩家发言轮（本轮重试）', () => {
     const result = determineRetryTarget(true, 3);
     assert.equal(result.targetRound, 3);
     assert.equal(result.isRetainPlayerRetry, true);
   });
 
-  it('有玩家发言 + 无NPC回复（round<1） → 整场重开', () => {
+  it('有玩家发言 + 玩家轮次 <1（异常兜底） → 整场重开', () => {
     const result = determineRetryTarget(true, 0);
     assert.equal(result.targetRound, 0);
     assert.equal(result.isRetainPlayerRetry, false);
   });
 
-  it('有玩家发言 + lastNonPlayerRound=null → 整场重开', () => {
+  it('有玩家发言 + 查不到玩家轮次 → 整场重开', () => {
     const result = determineRetryTarget(true, null);
     assert.equal(result.targetRound, 0);
     assert.equal(result.isRetainPlayerRetry, false);

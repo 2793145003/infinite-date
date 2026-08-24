@@ -11,8 +11,9 @@
  */
 
 import { imageUrl } from './api';
+import butterflyWallpaperImg from '../assets/images/butterfly_ripple_wallpaper_1786953401075.jpg';
 
-export type ThemeId = 'dark-night' | 'warm-dusk' | 'deep-forest' | 'light-paper' | 'pure-white' | 'custom';
+export type ThemeId = 'dark-night' | 'warm-dusk' | 'deep-forest' | 'light-paper' | 'pure-white' | 'watercolor' | 'custom';
 
 export const THEMES: { id: ThemeId; name: string; desc: string; swatch: string[] }[] = [
   { id: 'dark-night',  name: '暗夜', desc: '深蓝底 · 青色气泡', swatch: ['#0d1117', '#5dade2', '#e8a838'] },
@@ -20,6 +21,7 @@ export const THEMES: { id: ThemeId; name: string; desc: string; swatch: string[]
   { id: 'deep-forest', name: '深森', desc: '墨绿底 · 翠绿气泡', swatch: ['#0a1410', '#7dcf9f', '#e8a838'] },
   { id: 'light-paper', name: '浅纸', desc: '米白底 · 蓝色气泡', swatch: ['#f5f1ea', '#4a8db8', '#c4942a'] },
   { id: 'pure-white',  name: '纯白', desc: '纯白底 · 蓝色气泡', swatch: ['#ffffff', '#4a8db8', '#c4942a'] },
+  { id: 'watercolor', name: '心动水彩', desc: '浅蓝水彩 · 白毛玻璃', swatch: ['#dfe7f5', '#5b7fd6', '#d9a63a'] },
 ];
 
 /* === 字体大小 === */
@@ -61,6 +63,8 @@ export function applyTheme(theme: ThemeId): void {
   }
   // 背景蒙版透明度是用户偏好，clearCustomVars 会清掉 --bg-overlay，这里重新应用
   applyBgOverlay(getBgOverlay());
+  // 地图页默认背景：随主题选一张预设壁纸（--map-bg-image）
+  applyMapBg(theme);
 }
 
 /** 初始化：页面加载时立即应用已存的主题，避免闪烁 */
@@ -401,13 +405,74 @@ export const HOME_BG_PRESETS: HomeBgPreset[] = [
     id: 'mist', name: '晨雾', desc: '灰白薄雾 · 亮色', light: true,
     css: 'radial-gradient(circle at 30% 20%, rgba(255,255,255,0.5), transparent 55%), linear-gradient(160deg, #e9edf2 0%, #d9dfe8 45%, #ccd5e0 100%)',
   },
+  {
+    id: 'butterfly', name: '水畔蝶影', desc: '水彩蝴蝶 · 原画', light: false,
+    css: `url(${butterflyWallpaperImg})`,
+  },
+  {
+    id: 'mist-blue', name: '冰晶薄雾蓝', desc: '渐变蓝紫 · 冷调', light: false,
+    css: 'url("https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=800&q=80")',
+  },
+  {
+    id: 'deep-blue-ocean', name: '深蓝海洋之境', desc: '碧蓝海水 · 通透', light: false,
+    css: 'url("https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=800&q=80")',
+  },
+  {
+    id: 'starlit-night', name: '星光梦境晚风', desc: '雪山星空 · 静谧', light: false,
+    css: 'url("https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=800&q=80")',
+  },
 ];
+
+/** v3 首页壁纸（照抄心动终端 presetWallpapers：水畔蝶影原画 + 3 张 unsplash 渐变图） */
+export interface WallpaperPreset {
+  id: string;
+  name: string;
+  /** 缩略图 img src */
+  url: string;
+}
+
+export const V3_WALLPAPERS: WallpaperPreset[] = [
+  { id: 'butterfly', name: '水畔蝶影 · 原画', url: butterflyWallpaperImg },
+  { id: 'mist-blue', name: '冰晶薄雾蓝', url: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=800&q=80' },
+  { id: 'deep-blue-ocean', name: '深蓝海洋之境', url: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=800&q=80' },
+  { id: 'starlit-night', name: '星光梦境晚风', url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=800&q=80' },
+];
+
+/* === 地图页默认背景：随主题选一张预设壁纸 === */
+
+/** 主题 → 预设壁纸 id 映射（按色调对应） */
+const THEME_MAP_BG: Record<Exclude<ThemeId, 'custom'>, string> = {
+  'dark-night': 'starry',   // 暗夜 → 星夜
+  'warm-dusk': 'sunset',    // 暖暮 → 晚霞
+  'deep-forest': 'forest',  // 深森 → 深森
+  'light-paper': 'mist',    // 浅纸 → 晨雾
+  'pure-white': 'mist',     // 纯白 → 晨雾
+  'watercolor': 'mist',    // 心动水彩 → 晨雾
+};
+
+function getThemeMapBg(theme: ThemeId): string {
+  if (theme === 'custom') {
+    return getCustomTheme().isDark ? 'starry' : 'mist';
+  }
+  return THEME_MAP_BG[theme] ?? 'starry';
+}
+
+/** 把主题对应的默认壁纸写到 --map-bg-image 变量（地图页背景用） */
+export function applyMapBg(theme: ThemeId): void {
+  const root = document.documentElement;
+  const preset = HOME_BG_PRESETS.find((x) => x.id === getThemeMapBg(theme));
+  if (preset) {
+    root.style.setProperty('--map-bg-image', preset.css);
+  } else {
+    root.style.removeProperty('--map-bg-image');
+  }
+}
 
 /* === 背景图蒙版透明度（用户可调滑杆） === */
 
 const BG_OVERLAY_KEY = 'idate_bg_overlay';
-/** 默认蒙版透明度（30%，背景图透亮 + 文字可读的平衡点） */
-export const DEFAULT_BG_OVERLAY = 0.3;
+/** 默认蒙版透明度（0 = 无蒙版，壁纸原样透亮，与心动终端一致；深色壁纸时玩家可自行调高滑杆保证可读） */
+export const DEFAULT_BG_OVERLAY = 0;
 /** 蒙版透明度上限（80%，再高背景图几乎被遮没） */
 export const BG_OVERLAY_MAX = 0.8;
 
@@ -481,4 +546,11 @@ export function applyHomeBg(bg: HomeBg): void {
   } else {
     root.style.removeProperty('--home-bg-image');
   }
+}
+
+/** 当前是否有壁纸：以 DOM 的 --home-bg-image 为准（applyHomeBg 统一设置，v3 默认蝴蝶/玩家选择都走这里，不依赖 localStorage） */
+export function hasHomeBgImage(): boolean {
+  if (typeof document === 'undefined') return false;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--home-bg-image').trim();
+  return v !== '' && v !== 'none';
 }

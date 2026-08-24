@@ -102,6 +102,18 @@ function roleStance(role: string, playerName: string): string {
   return stance + '注意保持角色人设。';
 }
 
+/**
+ * 任务场景：按「常在地点 place」过滤世界 NPC——只有 place 等于当前地点名（或没写 place）的 NPC 才在场。
+ * 否则"人还在栖霞竹苑、玩家在路上却已把她拉进对话"——出场时机错位，NPC 会串成跟着主角赶路的人。
+ */
+function filterNpcsByPlace(npcs: SceneNpc[], currentLocationId: string | null | undefined): SceneNpc[] {
+  const curName = currentLocationId
+    ? (db.prepare('SELECT name FROM scene_locations WHERE id = ?').get(currentLocationId) as { name?: string } | undefined)?.name ?? ''
+    : '';
+  if (!curName) return npcs; // 拿不到当前地点名，不过滤（兜底，保持原行为）
+  return npcs.filter((n) => !n.place || n.place === curName);
+}
+
 // ─── 玩家画像 ─────────────────────────────────────────
 
 /**
@@ -248,7 +260,8 @@ function buildSceneContext(session: any): SceneContext {
   const npcLocId = session.scene_type === 'mission' ? (session.root_location_id || effLocId) : effLocId;
   const npcLoc = npcLocId === effLocId ? loc : db.prepare('SELECT npcs FROM scene_locations WHERE id = ?').get(npcLocId) as any;
   if (npcLoc?.npcs) {
-    const npcs = jsonParse<SceneNpc[]>(npcLoc.npcs, []);
+    let npcs = jsonParse<SceneNpc[]>(npcLoc.npcs, []);
+    if (session.scene_type === 'mission') npcs = filterNpcsByPlace(npcs, session.current_location_id);
     if (npcs.length) {
       residentNpcs = npcs
         .map((n) => `${n.name}（${n.role}）：${n.persona}`)
@@ -586,7 +599,7 @@ export async function advanceScene(
   // 剧本模式无地点概念，跳过路人。
   const isScenario = session.scene_type === 'scenario';
   const rNpcs = isScenario ? [] : (session.scene_type === 'mission'
-    ? getNpcs(session.root_location_id || session.current_location_id || '')  // 任务场景：世界 NPC 挂根地点、始终在场，不随 move 走
+    ? filterNpcsByPlace(getNpcs(session.root_location_id || session.current_location_id || ''), session.current_location_id)  // 任务场景：世界 NPC 挂根地点，按常在地点 place 过滤——只有人在当前地点才在场
     : getNpcs(session.current_location_id || session.root_location_id));
   for (const n of rNpcs) {
     const key = n.name;
@@ -632,8 +645,22 @@ export async function advanceScene(
     let stance = '';
     if (isMission) {
       if (npc) {
-        // 任务 NPC：按 role 给定位（角色视角，不用「贵人/对手」剧作词；role 缺失则按普通居民兜底）
-        stance = roleStance(npc.role, playerName);
+        // 任务 NPC：role 定位 + 第一人称关系定位（我在哪、来找我的是谁），
+        // 让她清楚自己的位置和面对的人，不被"跟着主角走"的对话历史带跑。
+        const playerNickname = (db.prepare('SELECT name FROM players WHERE id = ?').get(playerId) as any)?.name || playerName;
+        const companionName = characterIds.length ? (getCharacterName(characterIds[0]!) ?? '') : '';
+        const npcRoles = parseNpcRoles(session.npc_roles);
+        const who: string[] = [];
+        if (session.player_role) who.push(`${playerNickname}（${session.player_role.replace(/你/g, playerNickname)}）`);
+        if (npcRoles.length && companionName) {
+          const d = npcRoles[0]!.description.replace(/他|她/g, companionName);
+          const body = companionName && d.startsWith(companionName) ? d.slice(companionName.length).replace(/^是/, '') : d;
+          who.push(`${companionName}（${body}）`);
+        }
+        const relationLine = who.length ? `\n来找你的/跟着一起来的人：${who.join('；')}。` : '';
+        stance = roleStance(npc.role, playerName)
+          + (npc.place ? `\n你此刻人在「${npc.place}」，就在你自己该在的地方，没有在赶路。` : '')
+          + relationLine;
       } else {
         // 男主：先看任务世界的人物名单（只有名字+人设，不给 role，六亲关系仍隐藏），再给同伴立场
         const npcList = rNpcs.map((n) => `${n.name}：${n.persona}`).join('\n');
@@ -649,8 +676,11 @@ export async function advanceScene(
       character_id: a.characterId,
       character_name: a.characterName,
       character_card: npc
-        // 常驻路人：用 persona 造一张简卡，让演员能基于其身份开口（不注入 role 标签，避免剧透谁敌谁友）
-        ? `【角色】${npc.name}（本地的常驻人物）\n【人设/职责】${npc.persona}\n（你是这里的常驻者，平时在玩家和主角身边自然活动，接话、引话题、打圆场都自然）${npc.clues?.length ? `\n【你心里知道的事】${npc.clues.join('；')}\n（这是你藏着、但不轻易全说的事：对方问到了、或话题自然触及了，你才淡淡透露一点；不要一上来就全盘托出，也不要死咬不说。）` : ''}`
+        ? (isMission
+          // 任务世界 NPC：不是"常驻路人打圆场"，而是这个世界的居民/角色——你是谁、你的处境、你人在哪。
+          ? `【角色】${npc.name}\n【你是什么人】${npc.persona}${npc.role ? `\n【你的处境】${npc.role}` : ''}${npc.place ? `\n【你此刻人在】${npc.place}` : ''}${npc.clues?.length ? `\n【你心里知道的事】${npc.clues.join('；')}\n（这是你藏着、但不轻易全说的事：对方问到了、或话题自然触及了，你才淡淡透露一点；不要一上来就全盘托出，也不要死咬不说。）` : ''}`
+          // 约会场景路人：常驻者，自然接话打圆场
+          : `【角色】${npc.name}（本地的常驻人物）\n【人设/职责】${npc.persona}\n（你是这里的常驻者，平时在玩家和主角身边自然活动，接话、引话题、打圆场都自然）${npc.clues?.length ? `\n【你心里知道的事】${npc.clues.join('；')}\n（这是你藏着、但不轻易全说的事：对方问到了、或话题自然触及了，你才淡淡透露一点；不要一上来就全盘托出，也不要死咬不说。）` : ''}`)
         : buildCharacterCard(playerId, a.characterId),
       player_profile: profile,
       player_description: npc
@@ -721,7 +751,7 @@ export async function advanceScene(
 
   // 6) 跑一轮 —— 在 LLM 开跑前先拍快照（供后续按轮撤回）
   //    场基线快照每次开会只拍一次（insert-once）；轮快照每轮开始前拍一份本次轮前的累积态
-  captureRoundSnapshot(playerId, sessionId, session.round_no + 1);
+  captureRoundSnapshot(playerId, sessionId, opts?.regenerate ? session.round_no : session.round_no + 1);
   if (session.round_no === 0) captureStartSnapshot(playerId, sessionId);
 
   // 6.5) 玩家消息先落库（在引擎跑之前）——
@@ -756,7 +786,9 @@ export async function advanceScene(
   //    避免"玩家消息已写、NPC/旁白/stats 未写"的半落库残局。
   //    记忆折叠（下方 sync:false）是 fire-and-forget、先 await LLM 才写库，
   //    在同步单线程下必然晚于本段 COMMIT 执行，不会污染本事务。
-  const nextRound = session.round_no + 1;
+  // 重试（regenerate）路径：rollback 已把 round_no 修正为玩家发言所在轮，重新生成的 NPC/旁白
+  // 应落回同一轮（不推进），否则重试后的回复会和玩家发言分属两轮。
+  const nextRound = opts?.regenerate ? session.round_no : session.round_no + 1;
   const now = Date.now();
   db.exec('BEGIN');
   try {

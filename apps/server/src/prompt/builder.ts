@@ -313,6 +313,26 @@ export function formatPersonalityOnly(char: CharacterData): string {
   return formatPersonality(char);
 }
 
+/** NPC 邀请任务 worldgen 注入的男主信息（姓名/性别/性格/擅长/过去经历） */
+export interface NpcMissionProfile {
+  name: string;
+  gender: string;
+  persona: string;
+  skills: string;
+  backstory: string;
+}
+
+export function formatNpcMissionProfile(char: CharacterData): NpcMissionProfile {
+  const genderText = char.gender === 'female' ? '女' : char.gender === 'male' ? '男' : '未设定';
+  return {
+    name: char.name,
+    gender: genderText,
+    persona: formatPersonality(char),
+    skills: formatSkills(char),
+    backstory: [formatBackground(char), formatBackstoryMilestones(char)].join('\n'),
+  };
+}
+
 function formatPersonality(char: CharacterData): string {
   return [
     `【表面】${char.personality.surface}`,

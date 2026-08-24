@@ -167,6 +167,12 @@ export function Desktop({
     setActivePage(Math.round(el.scrollLeft / Math.max(1, el.clientWidth)));
   };
 
+  const goToPage = (pi: number) => {
+    const el = appPagesRef.current;
+    if (!el) return;
+    el.scrollTo({ left: pi * el.clientWidth, behavior: 'smooth' });
+  };
+
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
   const dateStr = `${now.getMonth() + 1}月${now.getDate()}日`;
   const weekStr = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()];
@@ -174,17 +180,18 @@ export function Desktop({
 
   return (
     <div className={`id-home-screen${homeBg.type !== 'none' ? ' has-home-bg' : ''}`}>
-      {/* Widget 区域：优先级 约会 > 剧本 > 任务进行中 > 已读未回 > 新任务 > 短信 > 邮件 > 默认时钟 */}
-      {activeSceneDate ? (
-        <div className="id-widget" onClick={() => onNavigate({ type: 'scene-conversation', sessionId: activeSceneDate.id })}>
-          <div className="id-widget-label">💗 约会进行中</div>
-          <div className="id-widget-title-row">
-            <div className="id-widget-avatar">
-              {activeSceneDate.avatar ? (
-                <img src={imageUrl(activeSceneDate.avatar)} alt="" className="id-widget-avatar-img" />
-              ) : (
-                (activeSceneDate.characterName?.charAt(0) ?? '?')
-              )}
+      <div className="id-home-grid">
+        {/* Widget 区域：优先级 约会 > 剧本 > 任务进行中 > 已读未回 > 新任务 > 短信 > 邮件 > 默认时钟 */}
+        {activeSceneDate ? (
+          <div className="id-widget" onClick={() => onNavigate({ type: 'scene-conversation', sessionId: activeSceneDate.id })}>
+            <div className="id-widget-label">💗 约会进行中</div>
+            <div className="id-widget-title-row">
+              <div className="id-widget-avatar">
+                {activeSceneDate.avatar ? (
+                  <img src={imageUrl(activeSceneDate.avatar)} alt="" className="id-widget-avatar-img" />
+                ) : (
+                  (activeSceneDate.characterName?.charAt(0) ?? '?')
+                )}
             </div>
             <div className="id-widget-title">{activeSceneDate.characterName}</div>
           </div>
@@ -244,8 +251,7 @@ export function Desktop({
         </div>
       )}
 
-      {/* 中间区域：左方形好友大图（头像铺满背景+文字蒙版，横滑切好友）+ 右长方形卦象卡 */}
-      <div className="id-desktop-center">
+        {/* 中间区域：左方形好友大图（头像铺满背景+文字蒙版，横滑切好友）+ 右长方形卦象卡 */}
         <div className="id-friend-rail">
           {friends.length === 0 ? (
             <div className="id-friend-card id-friend-empty">
@@ -304,7 +310,13 @@ export function Desktop({
       {appPages.length > 1 && (
         <div className="id-app-dots">
           {appPages.map((_, pi) => (
-            <span key={pi} className={pi === activePage ? 'is-active' : ''} />
+            <button
+              key={pi}
+              type="button"
+              className={`id-app-dot${pi === activePage ? ' is-active' : ''}`}
+              onClick={() => goToPage(pi)}
+              aria-label={`第 ${pi + 1} 页`}
+            />
           ))}
         </div>
       )}

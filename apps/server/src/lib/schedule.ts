@@ -152,7 +152,15 @@ export function getNpcOnlineState(
   charData: Record<string, any>,
   now: number,
 ): NpcOnlineState {
-  // TODO(npc-task): mission 态——有进行中的 solo 任务时返回 'mission'
+  // mission 态：NPC 任务进行中（active 一起做 / solo 独自做且未到期）→ 在任务世界，短信收不到
+  const inMission = db.prepare(`
+    SELECT 1 FROM missions
+    WHERE player_id = ? AND quest_type = 'npc' AND assignee_id = ?
+      AND (status = 'active' OR (status = 'solo' AND solo_complete_at > ?))
+    LIMIT 1
+  `).get(playerId, characterId, now);
+  if (inMission) return 'mission';
+
   const ptype = classifyPersonality(charData);
   const win = sleepWindowFor(playerId, characterId, ptype, charData, now);
   if (!win) return 'online';
@@ -176,7 +184,7 @@ export function getNpcOnlineState(
 function bjDayStartMs(ms: number): number {
   return Math.floor((ms + 8 * 3600 * 1000) / 86400000) * 86400000 - 8 * 3600 * 1000;
 }
-function bjDayKey(ms: number): string {
+export function bjDayKey(ms: number): string {
   const d = new Date(ms + 8 * 3600 * 1000);
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -218,9 +226,9 @@ function walkSceneTimeline(
     WHERE l.world_id = ?
       AND l.is_public = 1
       AND l.character_instance_id IS NULL
-      AND (NOT EXISTS (SELECT 1 FROM scene_homes h WHERE h.location_id = l.id) OR is_my_home = 1)
+      AND (l.owner_character_id IS NULL OR l.owner_character_id = ?)
     ORDER BY l.id
-  `).all(characterId, HUB_WORLD_ID) as { location_id: string; name: string; is_my_home: number; activities: string }[];
+  `).all(characterId, HUB_WORLD_ID, characterId) as { location_id: string; name: string; is_my_home: number; activities: string }[];
 
   // 地点活动池：优先该地点的可编辑 activities（JSON）。
   // 系统4点(plaza/cafe/park/market)若未设池则走性格模板 TEMPLATE_POOL；设了池则用池随机抽。
@@ -232,7 +240,7 @@ function walkSceneTimeline(
     try { acts = JSON.parse(r.activities || '[]'); } catch { acts = []; }
     if (!Array.isArray(acts) || acts.length === 0) {
       if (SYS_IDS.has(r.location_id)) continue; // 系统点无池 → 用性格模板
-      acts = [r.is_my_home ? '待在家里' : '闲逛'];
+      acts = [r.is_my_home ? '待在家里' : defaultActivityForLocation(r.name)];
     }
     locMap.set(r.location_id, { name: r.name, activities: acts });
   }
@@ -328,6 +336,25 @@ function walkSceneTimeline(
  * 用 walkSceneTimeline 生成当天 0:00→次日 0:00 的段，INSERT OR IGNORE（不覆盖已有记录，
  * 已存在的=可能被 LLM 改过，保留）。返回不暴露细节。
  */
+
+/**
+ * 无自定义活动池地点的默认活动词——按地点名关键词分类，
+ * 避免「主卫·闲逛」「床边·闲逛」这类室内/专属地点配「闲逛」的违和。
+ * 匹配不到（开放空间/区域）才落回「闲逛」。
+ */
+function defaultActivityForLocation(name: string): string {
+  const n = name;
+  if (/温泉/.test(n)) return '泡温泉放松';
+  if (/影院|电影院/.test(n)) return '看电影';
+  if (/酒吧/.test(n)) return '喝酒';
+  if (/车/.test(n)) return '乘车赶路';
+  if (/茶|餐厅|餐饮|咖啡|渔村/.test(n)) return '用餐喝茶';
+  if (/卫|浴|床|卧|衣帽|衣柜|镜|露台|沙发|起居|客厅|书房|厨房|餐桌|大理石|休息|阅读|生活|屋/.test(n)) return '在家休息';
+  if (/办公室|工作室|研究所|集团|总部|驻馆|异能局|治安|公证/.test(n)) return '埋头工作';
+  if (/家|宅|别墅/.test(n) && !/区$/.test(n)) return '待在家里';
+  return '闲逛';
+}
+
 function ensureSceneDay(
   playerId: string,
   characterId: string,

@@ -38,3 +38,5 @@ __pycache__/
 backup_*.csv
 
 /docs/v3-archive
+# 归档的死代码（AB/实验/一次性脚本、v2 旧前端等，不需要开源，git 历史可追溯）
+archive/

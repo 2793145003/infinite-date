@@ -6,7 +6,7 @@
   "description": "无限心动 — 无限流世界观驱动的AI约会模拟器",
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
-    "build": "pnpm --filter @idate/shared run build && pnpm --filter @idate/server run build && pnpm --filter @idate/web run build",
+    "build": "pnpm --filter @idate/shared run build && pnpm --filter @idate/server run build && pnpm --filter @idate/web-v4 run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test"
   },

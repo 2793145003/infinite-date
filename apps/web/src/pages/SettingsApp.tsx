@@ -2,18 +2,20 @@ import { useState, useEffect } from 'react';
 import type { PlayerInfo } from '../lib/api';
 import { api, clearToken } from '../lib/api';
 import { ImageUploadButton } from '../components/ImageUploadButton';
-import { THEMES, getTheme, setTheme, type ThemeId, FONT_SCALES, getFontScale, setFontScale, type FontScaleId, getFishToggle, setFishToggle, getCustomTheme, applyCustomTheme, DEFAULT_CUSTOM_THEME, type CustomTheme, HOME_BG_PRESETS, getHomeBg, setHomeBg, clearHomeBg, type HomeBg, getBgOverlay, setBgOverlay, DEFAULT_BG_OVERLAY, BG_OVERLAY_MAX } from '../lib/themes';
+import { THEMES, getTheme, setTheme, type ThemeId, FONT_SCALES, getFontScale, setFontScale, type FontScaleId, getFishToggle, setFishToggle, getCustomTheme, applyCustomTheme, DEFAULT_CUSTOM_THEME, type CustomTheme, HOME_BG_PRESETS, V3_WALLPAPERS, getHomeBg, setHomeBg, clearHomeBg, type HomeBg, getBgOverlay, setBgOverlay, DEFAULT_BG_OVERLAY, BG_OVERLAY_MAX } from '../lib/themes';
 
 export function SettingsApp({
   player,
   onBack,
   onLogout,
   onUpdate,
+  onNavigate,
 }: {
   player: PlayerInfo;
   onBack: () => void;
   onLogout: () => void;
   onUpdate: () => void;
+  onNavigate?: (view: { type: 'feedback' | 'archived' | 'admin' }) => void;
 }) {
   const [name, setName] = useState(player.name);
   const [gender, setGender] = useState(player.gender || 'female');
@@ -285,7 +287,40 @@ export function SettingsApp({
               {homeBg.type === 'none' && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
             </button>
 
-            {HOME_BG_PRESETS.map(p => {
+            {/* v3：预设壁纸画廊（照抄心动终端：4 列 9/16 缩略图 + 选中蓝边勾选 + 底部名字） */}
+            {onNavigate && (
+              <div style={{ marginTop: '0.3rem' }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-dim)', marginBottom: '0.4rem' }}>官方预设精选壁纸</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
+                  {V3_WALLPAPERS.map(wp => {
+                    const selected = homeBg.type === 'preset' && homeBg.value === wp.id;
+                    return (
+                      <div
+                        key={wp.id}
+                        onClick={() => { const bg: HomeBg = { type: 'preset', value: wp.id }; setHomeBg(bg); setHomeBgState(bg); }}
+                        style={{
+                          position: 'relative', borderRadius: '12px', overflow: 'hidden', cursor: 'pointer',
+                          aspectRatio: '9 / 16',
+                          border: selected ? '2px solid #3b82f6' : '2px solid #fff',
+                          boxShadow: selected ? '0 0 0 2px rgba(59,130,246,0.4), 0 4px 12px rgba(59,130,246,0.35)' : '0 1px 4px rgba(0,0,0,0.08)',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        <img src={wp.url} alt={wp.name} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        {selected && (
+                          <div style={{ position: 'absolute', top: 4, right: 4, width: 16, height: 16, borderRadius: '50%', background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }}>✓</div>
+                        )}
+                        <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: 'linear-gradient(to top, rgba(15,23,42,0.8), transparent)', padding: '4px 2px' }}>
+                          <span style={{ fontSize: '8.5px', color: '#fff', display: 'block', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{wp.name}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {!onNavigate && HOME_BG_PRESETS.map(p => {
               const selected = homeBg.type === 'preset' && homeBg.value === p.id;
               return (
                 <button
@@ -299,7 +334,7 @@ export function SettingsApp({
                     transition: 'all 0.15s',
                   }}
                 >
-                  <div style={{ width: 40, height: 28, borderRadius: 6, flexShrink: 0, background: p.css, border: '1px solid var(--border-soft)' }} />
+                  <div style={{ width: 40, height: 28, borderRadius: 6, flexShrink: 0, background: p.css, backgroundSize: 'cover', backgroundPosition: 'center', border: '1px solid var(--border-soft)' }} />
                   <div style={{ flex: 1, textAlign: 'left' }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)' }}>{p.desc}</div>
@@ -451,6 +486,26 @@ export function SettingsApp({
             </div>
           )}
         </div>
+
+        {/* 更多功能（v3：反馈 / 旧版功能 / 管理 收进设置） */}
+        {onNavigate && (
+          <div className="id-card">
+            <div className="id-card-title">📦 更多功能</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.4rem' }}>
+              <button className="id-btn sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => onNavigate({ type: 'feedback' })}>
+                💬 反馈
+              </button>
+              <button className="id-btn sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => onNavigate({ type: 'archived' })}>
+                🗄️ 旧版功能
+              </button>
+              {player.is_admin && (
+                <button className="id-btn sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => onNavigate({ type: 'admin' })}>
+                  🛠 管理
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* 关于 */}
         <div className="id-card" style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-mute)' }}>

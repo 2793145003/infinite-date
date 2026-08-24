@@ -319,8 +319,8 @@ function SceneScheduleModal({ characterId, onClose }: { characterId: string; onC
   );
 }
 
-function SceneSettingsModal({ loc, onClose, onChanged }: {
-  loc: SceneLocationInfo;
+export function SceneSettingsModal({ loc, onClose, onChanged }: {
+  loc: SceneLocationInfo | null;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -329,7 +329,7 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
   const [npRole, setNpRole] = useState('');
   const [npName, setNpName] = useState('');
   const [npPersona, setNpPersona] = useState('');
-  const [isPublic, setIsPublic] = useState(true);
+  const [isPublic, setIsPublic] = useState(loc?.isPublic ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -337,7 +337,7 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
     if (!name.trim() || busy) return;
     setBusy(true); setError('');
     try {
-      await api.sceneCreateLocation({ name: name.trim(), summary: summary.trim() || undefined, parentId: loc.id, isPublic });
+      await api.sceneCreateLocation({ name: name.trim(), summary: summary.trim() || undefined, parentId: loc?.id ?? null, isPublic });
       setName(''); setSummary('');
       onChanged();
     } catch (e) { setError((e as Error).message); }
@@ -345,7 +345,7 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
   };
 
   const addNpc = async () => {
-    if (!npRole.trim() || !npName.trim() || busy) return;
+    if (!loc || !npRole.trim() || !npName.trim() || busy) return;
     setBusy(true); setError('');
     try {
       await api.sceneAddNpc(loc.id, { role: npRole.trim(), name: npName.trim(), persona: npPersona.trim() || undefined });
@@ -359,8 +359,9 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
     <div className="id-modal-overlay" onClick={onClose}>
       <div className="id-modal" onClick={e => e.stopPropagation()}>
         <div className="id-modal-title">场景设置</div>
-        <div className="id-modal-desc">在「{loc.name}」里添加子地点或路人</div>
+        <div className="id-modal-desc">{loc ? `在「${loc.name}」里添加子地点或路人` : '在主城里添加一个新地点'}</div>
 
+        {loc && (
         <div className="id-card-section">
           <div className="id-card-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.3rem' }}>
             <label>{loc.isPublic ? '背景图（参赛/公开）' : '背景图'}</label>
@@ -386,6 +387,7 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
             />
           </div>
         </div>
+        )}
 
         <div className="id-card-section">
           <div className="id-card-row">
@@ -417,6 +419,7 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
           </div>
         </div>
 
+        {loc && (
         <div className="id-card-section">
           <div className="id-card-row">
             <label>路人身份</label>
@@ -434,6 +437,7 @@ function SceneSettingsModal({ loc, onClose, onChanged }: {
             <button className="id-btn primary" onClick={addNpc} disabled={busy || !npRole.trim() || !npName.trim()}>添加路人</button>
           </div>
         </div>
+        )}
 
         {error && <div className="id-modal-error">{error}</div>}
 

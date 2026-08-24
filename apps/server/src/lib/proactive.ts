@@ -62,7 +62,13 @@ export async function checkScheduleChange(playerId: string): Promise<ProactiveSm
         SELECT 1 FROM scene_sessions ss, json_each(ss.character_ids) j
         WHERE ss.player_id = r.player_id AND j.value = r.character_id AND ss.ended = 0
       )
-  `).all(playerId, DEITY_ID) as Array<{
+      AND NOT EXISTS (
+        SELECT 1 FROM missions m
+        WHERE m.player_id = r.player_id AND m.assignee_id = r.character_id
+          AND m.quest_type = 'npc'
+          AND (m.status = 'active' OR (m.status = 'solo' AND m.solo_complete_at > ?))
+      )
+  `).all(playerId, DEITY_ID, ts) as Array<{
     character_id: string; last_schedule_slot: number; thread_id: string;
     sms_urge: number; moment_urge: number;
   }>;

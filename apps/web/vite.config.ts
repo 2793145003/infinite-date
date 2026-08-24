@@ -35,6 +35,13 @@ export default defineConfig({
         ws: true,
         rewrite: (path) => path.replace(/^\/dsh/, ''),
       },
+      // v4 前端（心动终端）—— 保留前缀；web-v4 已按 base '/v4/' 注册静态资源，
+      // 且其 server.ts 会把 '/v4/api' 剥成 '/api'。
+      '/v4': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   resolve: {

@@ -32,14 +32,14 @@ export async function momentRoutes(app: FastifyInstance): Promise<void> {
 
     const limit = 50;
     const moments = db.prepare(`
-      SELECT id, author_type, author_id, content, image_path, mood, location_name, trigger_type, created_at
+      SELECT id, author_type, author_id, content, image_path, mood, location_name, trigger_type, visibility, created_at
       FROM moments
       WHERE player_id = ?
       ORDER BY created_at DESC
       LIMIT ?
     `).all(playerId, limit) as Array<{
       id: string; author_type: string; author_id: string; content: string; image_path: string | null;
-      mood: string; location_name: string; trigger_type: string; created_at: number;
+      mood: string; location_name: string; trigger_type: string; visibility: string; created_at: number;
     }>;
 
     // 批量获取互动
@@ -86,6 +86,7 @@ export async function momentRoutes(app: FastifyInstance): Promise<void> {
         mood: m.mood,
         locationName: m.location_name,
         triggerType: m.trigger_type,
+        visibility: m.visibility || 'public',
         createdAt: m.created_at,
         likes: likes.map(l => ({ id: l.id, authorType: l.author_type, authorId: l.author_id, authorName: resolveName(l.author_type, l.author_id) })),
         comments: comments.map(c => ({ id: c.id, authorType: c.author_type, authorId: c.author_id, authorName: resolveName(c.author_type, c.author_id), body: c.body, createdAt: c.created_at })),
@@ -124,20 +125,33 @@ export async function momentRoutes(app: FastifyInstance): Promise<void> {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
 
-    const { content, imagePath } = req.body as { content?: string; imagePath?: string };
+    const { content, imagePath, visibility, visibleTo, location } = req.body as {
+      content?: string; imagePath?: string; visibility?: string; visibleTo?: string[]; location?: string;
+    };
     if (!content?.trim() && !imagePath) {
       return reply.code(400).send({ error: '内容不能为空' });
     }
 
+    // 可见性白名单校验（非法值回退 public）
+    const vis = ['public', 'partner', 'friends', 'private'].includes(visibility ?? '')
+      ? visibility!
+      : 'public';
+    // 可见对象：partner/friends 时用传入的 character_id 列表，否则空
+    const visibleToArr = Array.isArray(visibleTo) ? visibleTo.filter((v) => typeof v === 'string') : [];
+    const loc = typeof location === 'string' ? location.trim() : '';
+
     const momentId = genId();
     const ts = now();
     db.prepare(`
-      INSERT INTO moments (id, player_id, author_type, author_id, content, image_path, mood, location_name, trigger_type, created_at)
-      VALUES (?, ?, 'player', ?, ?, ?, '', '', 'player', ?)
-    `).run(momentId, playerId, playerId, content?.trim() ?? '', imagePath ?? null, ts);
+      INSERT INTO moments (id, player_id, author_type, author_id, content, image_path, mood, location_name, trigger_type, visibility, visible_to, created_at)
+      VALUES (?, ?, 'player', ?, ?, ?, '', ?, 'player', ?, ?, ?)
+    `).run(
+      momentId, playerId, playerId, content?.trim() ?? '', imagePath ?? null,
+      loc, vis, JSON.stringify(visibleToArr), ts,
+    );
 
-    // 异步触发好友NPC评论（不阻塞响应）
-    triggerNpcComments(playerId, momentId, content?.trim() ?? '', imagePath).catch(() => {});
+    // 异步触发好友NPC评论（按可见性过滤，不阻塞响应）
+    triggerNpcComments(playerId, momentId, content?.trim() ?? '', vis, visibleToArr, imagePath).catch(() => {});
 
     return reply.send({ ok: true, momentId });
   });
@@ -224,12 +238,8 @@ export async function momentRoutes(app: FastifyInstance): Promise<void> {
     if (!moment) {
       return reply.code(404).send({ error: '帖子不存在' });
     }
-    // 只有玩家能删自己的帖子
-    if (moment.author_type !== 'player' || moment.author_id !== playerId) {
-      return reply.code(403).send({ error: '只能删除自己的帖子' });
-    }
-
-    db.prepare('DELETE FROM moments WHERE id = ?').run(momentId);
+    // 玩家可以删除自己 feed 里的任意帖子（含 NPC 发的动态——从自己 feed 移除即可）
+    db.prepare('DELETE FROM moments WHERE id = ? AND player_id = ?').run(momentId, playerId);
     return reply.send({ ok: true });
   });
 }
@@ -331,11 +341,26 @@ export async function generateNpcMoment(
  *
  * 逻辑：
  * - 获取玩家的所有好友NPC
- * - 每个NPC有一定概率"刷到"并评论（不是每个都评）
+ * - 按帖子可见性过滤「谁能评论」：
+ *   - public：所有好友都可能刷到
+ *   - partner：只有 visibleTo 里的伴侣（当前主页角色）
+ *   - friends：只有 visibleTo 里选中的好友
+ *   - private：无人评论（仅自己可见）
+ * - 每个可见NPC有一定概率"刷到"并评论（不是每个都评）
  * - 评论由各自characterData驱动，走LLM生成
  * - 评论有延迟感（不需要立刻全部出现，可以分批）
  */
-async function triggerNpcComments(playerId: string, momentId: string, momentContent: string, momentImagePath?: string): Promise<void> {
+async function triggerNpcComments(
+  playerId: string,
+  momentId: string,
+  momentContent: string,
+  visibility: string = 'public',
+  visibleTo: string[] = [],
+  momentImagePath?: string,
+): Promise<void> {
+  // 私密帖：无人评论
+  if (visibility === 'private') return;
+
   // 获取好友列表
   const friends = db.prepare(`
     SELECT character_id FROM friendships
@@ -344,12 +369,20 @@ async function triggerNpcComments(playerId: string, momentId: string, momentCont
 
   if (friends.length === 0) return;
 
+  // 按可见性过滤可见的好友
+  let visibleFriends = friends;
+  if (visibility === 'partner' || visibility === 'friends') {
+    const visibleSet = new Set(visibleTo);
+    visibleFriends = friends.filter((f) => visibleSet.has(f.character_id));
+    if (visibleFriends.length === 0) return;
+  }
+
   // 每个好友有概率评论（50%），模拟"刷到了但不一定评论"
-  // 至少1个NPC评论（如果只有一个好友则100%评论）
-  const commentingFriends = friends.filter(() => friends.length === 1 || Math.random() < 0.5);
-  if (commentingFriends.length === 0 && friends.length > 0) {
+  // 至少1个NPC评论（如果只有一个可见好友则100%评论）
+  const commentingFriends = visibleFriends.filter(() => visibleFriends.length === 1 || Math.random() < 0.5);
+  if (commentingFriends.length === 0 && visibleFriends.length > 0) {
     // 确保至少一个评论
-    commentingFriends.push(friends[0]!);
+    commentingFriends.push(visibleFriends[0]!);
   }
 
   for (const friend of commentingFriends) {
