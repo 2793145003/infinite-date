@@ -191,7 +191,7 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
         hasChildren: (childCount.get(r.id) ?? 0) > 0,
         npcs: parseSceneNpcs(r.npcs),
         isHome: !!r.home_of,
-        background: (r.background_image as string | null)?.trim() ?? '',
+        background: getLocationBackground(r.id),
         lotCount: r.lot_count ?? 0,
       })),
     });

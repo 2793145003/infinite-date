@@ -16,8 +16,8 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
 
-    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, tutorial_step, rating_score, is_admin FROM players WHERE id = ?').get(playerId) as {
-      id: string; name: string; pronouns: string; gender: string; appearance: string; tutorial_step: number; rating_score: number; is_admin: number;
+    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, avatar, home_bg, tutorial_step, rating_score, is_admin FROM players WHERE id = ?').get(playerId) as {
+      id: string; name: string; pronouns: string; gender: string; appearance: string; avatar: string; home_bg: string; tutorial_step: number; rating_score: number; is_admin: number;
     };
 
     const perm = db.prepare('SELECT balance FROM player_permissions WHERE player_id = ?').get(playerId) as { balance: number } | undefined;
@@ -33,7 +33,7 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
 
-    const { name, pronouns, gender, appearance } = req.body as { name?: string; pronouns?: string; gender?: string; appearance?: string };
+    const { name, pronouns, gender, appearance, avatar, home_bg } = req.body as { name?: string; pronouns?: string; gender?: string; appearance?: string; avatar?: string; home_bg?: string };
     const updates: string[] = [];
     const params: (string | number)[] = [];
 
@@ -41,6 +41,8 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
     if (pronouns !== undefined) { updates.push('pronouns = ?'); params.push(pronouns); }
     if (gender !== undefined) { updates.push('gender = ?'); params.push(gender); }
     if (appearance !== undefined) { updates.push('appearance = ?'); params.push(appearance); }
+    if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar); }
+    if (home_bg !== undefined) { updates.push('home_bg = ?'); params.push(home_bg); }
 
     if (updates.length === 0) {
       return reply.code(400).send({ error: '没有要更新的字段' });
@@ -125,7 +127,7 @@ export async function playerRoutes(app: FastifyInstance): Promise<void> {
       db.prepare('DELETE FROM player_permissions WHERE player_id = ?').run(playerId);
 
       // 6. 重置玩家数据：名字清空，教程回到0，权限归零
-      db.prepare("UPDATE players SET name = '', tutorial_step = 0, rating_score = 0, pronouns = '', persona_notes = '', gender = 'female', appearance = '', updated_at = ? WHERE id = ?").run(now(), playerId);
+      db.prepare("UPDATE players SET name = '', tutorial_step = 0, rating_score = 0, pronouns = '', persona_notes = '', gender = 'female', appearance = '', avatar = '', updated_at = ? WHERE id = ?").run(now(), playerId);
       // 重新初始化权限
       db.prepare('INSERT INTO player_permissions (player_id, balance, total_earned, total_spent, updated_at) VALUES (?, 0, 0, 0, ?)').run(playerId, now());
 

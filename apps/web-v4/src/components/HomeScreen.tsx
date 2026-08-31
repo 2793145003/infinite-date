@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeftRight, Camera, MapPin, Sparkles, Heart, Bell, Mail, Map, Compass, Clapperboard } from 'lucide-react';
+import { ArrowLeftRight, Camera, MapPin, Sparkles, Heart, Bell, Mail, Map, Compass, Clapperboard, BookOpen } from 'lucide-react';
 import { Character, ActivityState } from '../types';
 import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { api } from '../lib/api';
@@ -10,6 +10,7 @@ interface HomeScreenProps {
   onSelectCharacter: (char: Character) => void;
   onOpenChat: () => void;
   onOpenMapDating: () => void;
+  onOpenNovel: () => void;
   onOpenScenarios: () => void;
   onOpenTasks: () => void;
   onOpenCharacterArchive: () => void;
@@ -28,6 +29,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSelectCharacter,
   onOpenChat,
   onOpenMapDating,
+  onOpenNovel,
   onOpenScenarios,
   onOpenTasks,
   onOpenCharacterArchive,
@@ -118,14 +120,24 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   // 约会进行中：主页角色锁定在约会对象，禁止切换
   const isDating = activity.kind === 'scene-date' || activity.kind === 'dating';
 
-  // Quotes / Whisper lines
-  const quotes = [
+  // 每日寄语：gemma 现场写（换角色重新生成）；加载中/生成失败兜底默认句
+  const DEFAULT_POEMS = [
     '“ 那些共度的静谧时光，最为震耳欲聋。 ”',
     '“ 只要你在身边，无论哪种沉默都很温柔。 ”',
     '“ 晚风吹过街道，你在我身旁便是一切归宿。 ”',
     '“ 所有的心动与偏爱，都只为你一人写就。 ”',
   ];
-  const [quoteIndex] = useState(0);
+  const [poem, setPoem] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPoem(null); // 切角色先清空，避免短暂显示上一个角色的寄语
+    if (!activeCharacter?.id) return;
+    let cancelled = false;
+    api.getHomePoem(activeCharacter.id)
+      .then((res) => { if (!cancelled && res.poem) setPoem(res.poem); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeCharacter?.id]);
 
   return (
     <div
@@ -171,7 +183,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <button
             id="btn-user-avatar-header"
             onClick={onOpenMailbox || onOpenSettings || onOpenCharacterArchive}
-            className="w-8 h-8 rounded-lg frosted-glass border border-border flex items-center justify-center text-ink hover:bg-bg-muted hover:border-border-strong transition active:scale-95 cursor-pointer shadow-xs group"
+            className="w-8 h-8 rounded-lg frosted-glass border border-border flex items-center justify-center text-ink hover:bg-bg-muted hover:border-border-strong transition active:scale-95 cursor-pointer relative shadow-xs group"
             aria-label="信箱/邮箱"
             title="信箱"
           >
@@ -371,21 +383,48 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
       {/* 4. Bottom Three Feature Cards Grid matching character design */}
       <section className="grid grid-cols-2 gap-2.5 mt-[20px] mb-2">
-        {/* Left Big Card: 地图约会 */}
-        <button
-          id="btn-map-dating-card"
-          onClick={onOpenMapDating}
-          className="rounded-xl frosted-glass p-3.5 border border-border shadow-xs flex flex-col items-center justify-center text-center relative group min-h-[140px] cursor-pointer hover:border-border-strong transition active:scale-98"
-        >
-          {/* Subtle line icon container */}
-          <div className="w-14 h-14 rounded-xl bg-bg-muted border border-border flex items-center justify-center text-ink group-hover:scale-105 group-hover:text-ink transition-all shadow-2xs">
-            <Map className="w-6 h-6 stroke-[1.6]" />
-          </div>
+        {/* Left Stacked Cards: 地图约会 & 互动小说（地图约会砍半，让一半给互动小说） */}
+        <div className="flex flex-col gap-2.5 justify-between">
+          {/* Top: 地图约会 */}
+          <button
+            id="btn-map-dating-card"
+            onClick={onOpenMapDating}
+            className="flex-1 rounded-xl frosted-glass p-3 border border-border shadow-xs flex items-center justify-between group cursor-pointer hover:border-border-strong transition-all active:scale-98"
+          >
+            {/* Left line icon */}
+            <div className="w-10 h-10 rounded-xl bg-bg-muted border border-border flex items-center justify-center text-ink shrink-0 group-hover:scale-105 group-hover:text-ink transition-all shadow-2xs">
+              <Map className="w-5 h-5 stroke-[1.6]" />
+            </div>
 
-          <div className="flex items-center justify-center gap-1 text-ink font-bold text-xs mt-2.5 tracking-tight group-hover:text-ink transition">
-            <span>地图约会</span>
-          </div>
-        </button>
+            {/* Right Title */}
+            <div className="text-right pr-1">
+              <h3 className="text-xs font-bold text-ink group-hover:text-ink tracking-tight transition">
+                地图约会
+              </h3>
+              <span className="text-[10px] text-ink font-normal">地图相识</span>
+            </div>
+          </button>
+
+          {/* Bottom: 互动小说 */}
+          <button
+            id="btn-novel-card"
+            onClick={onOpenNovel}
+            className="flex-1 rounded-xl frosted-glass p-3 border border-border shadow-xs flex items-center justify-between group cursor-pointer hover:border-border-strong transition-all active:scale-98"
+          >
+            {/* Left line icon */}
+            <div className="w-10 h-10 rounded-xl bg-bg-muted border border-border flex items-center justify-center text-ink shrink-0 group-hover:scale-105 group-hover:text-ink transition-all shadow-2xs">
+              <BookOpen className="w-5 h-5 stroke-[1.6]" />
+            </div>
+
+            {/* Right Title */}
+            <div className="text-right pr-1">
+              <h3 className="text-xs font-bold text-ink group-hover:text-ink tracking-tight transition">
+                互动小说
+              </h3>
+              <span className="text-[10px] text-ink font-normal">共同创作</span>
+            </div>
+          </button>
+        </div>
 
         {/* Right Stacked Cards: 任务世界 & 场景剧本 */}
         <div className="flex flex-col gap-2.5 justify-between">
@@ -434,7 +473,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {/* 5. Poetic Subtitle & Waiting Text */}
       <section className="text-center pt-2 pb-1">
         <p className="text-xs text-ink font-sans tracking-wide leading-relaxed">
-          {quotes[quoteIndex]}
+          {poem || DEFAULT_POEMS[0]}
+        </p>
+        <p className="text-[10px] text-ink-soft text-right mt-0.5 pr-0.5">
+          —— {activeCharacter.name}
         </p>
         <p className="text-[10px] text-ink mt-1 tracking-wider">
           正在静候你的言语...

@@ -6,9 +6,9 @@ import type { FastifyInstance } from 'fastify';
 import { db } from '../db';
 import { requireAuth } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
-import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, type PromptContext } from '../prompt/builder';
+import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, smsMessageText, type PromptContext } from '../prompt/builder';
 import { retrieveRelevantMemories, maybeFoldSmsIncremental, getUnifiedTimeline } from '../lib/memory';
-import { resetSmsUrge, checkScheduleChange } from '../lib/proactive';
+import { resetSmsUrge, checkScheduleChange, insertProactiveImagePlaceholder, fillProactiveImage } from '../lib/proactive';
 import type { CharacterData } from '@idate/shared';
 import { DEITY_ID } from '@idate/shared';
 import { isCreationKeyword } from './creation';
@@ -62,8 +62,18 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const lastMsg = db.prepare(`
-        SELECT body, sender FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1
-      `).get(t.id) as { body: string; sender: string } | undefined;
+        SELECT body, sender, image_asset_id, metadata FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1
+      `).get(t.id) as { body: string; sender: string; image_asset_id: string | null; metadata: string | null } | undefined;
+
+      // 最后一条是图片消息（body 为空）时，摘要显示 [图片]，而不是空串（前端会回退成"开始聊天吧"）
+      let lastMessageText = lastMsg?.body ?? '';
+      if (!lastMessageText) {
+        let isPendingImage = false;
+        if (lastMsg?.metadata) {
+          try { isPendingImage = (JSON.parse(lastMsg.metadata) as { pending?: boolean }).pending === true; } catch { /* ignore */ }
+        }
+        if (lastMsg?.image_asset_id || isPendingImage) lastMessageText = '[图片]';
+      }
 
       return {
         ...t,
@@ -72,13 +82,25 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
         gender,
         age,
         appearance,
-        last_message: lastMsg?.body ?? '',
+        last_message: lastMessageText,
         last_sender: lastMsg?.sender ?? '',
         online_state: onlineState,
       };
     });
 
     return reply.send({ threads: result });
+  });
+
+  // 短信未读总数（所有线程 unread_count 之和，供首页/导航角标）
+  app.get('/sms/unread-count', async (req, reply) => {
+    const playerId = requireAuth(req, reply);
+    if (!playerId) return;
+
+    const row = db.prepare(
+      'SELECT COALESCE(SUM(unread_count), 0) as count FROM message_threads WHERE player_id = ?'
+    ).get(playerId) as { count: number };
+
+    return reply.send({ count: row.count });
   });
 
   // 获取某个线程的消息
@@ -197,15 +219,15 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
 
     // 获取最近消息
     const recentMsgs = db.prepare(`
-      SELECT sender, body, image_asset_id FROM text_messages WHERE thread_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT 10
-    `).all(threadId, ts) as Array<{ sender: string; body: string; image_asset_id: string | null }>;
+      SELECT sender, body, image_asset_id, metadata FROM text_messages WHERE thread_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT 10
+    `).all(threadId, ts) as Array<{ sender: string; body: string; image_asset_id: string | null; metadata: string | null }>;
 
     // 记忆检索（Phase 5）
     let retrievedMemories: string | null = null;
     if (!isDeity) {
       retrievedMemories = await retrieveRelevantMemories(
         playerId, thread.character_id,
-        recentMsgs.map(m => ({ role: m.sender, text: m.body })),
+        recentMsgs.map(m => ({ role: m.sender, text: smsMessageText(m) })),
         textBody,
       );
     }
@@ -223,7 +245,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       chronicleSummary: getUnifiedTimeline(playerId, thread.character_id),
       recentMessages: recentMsgs.reverse().map(m => ({
         role: (m.sender === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
-        text: m.body,
+        text: smsMessageText(m),
       })),
       isTextMessage: true,
       isDeity,
@@ -264,6 +286,16 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
       const npcMsgIds = npcSave.msgIds;
 
+      // 玩家提问触发配图：LLM 输出 image_prompt → 先同步插占位气泡拿 id，再异步出图填图（文字消息已先入库，不阻塞）
+      const replyImagePrompt = reply_data.image_prompt?.trim();
+      const imagePending = !!replyImagePrompt && !isDeity;
+      let imagePendingId: string | undefined;
+      if (imagePending) {
+        imagePendingId = insertProactiveImagePlaceholder(threadId, replyImagePrompt, now(), false);
+        void fillProactiveImage(playerId, threadId, imagePendingId, replyImagePrompt, false)
+          .catch(err => console.error('[sms] 配图生成失败:', err instanceof Error ? err.message : err));
+      }
+
       // 短信记忆折叠（异步，不阻塞响应）
       if (!isDeity) {
         maybeFoldSmsIncremental(threadId, playerId, thread.character_id).catch(() => {});
@@ -298,6 +330,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
           internal_viewed: false,
         })),
         invite,
+        imagePending: imagePending ? { id: imagePendingId } : null,
       });
     } catch (err) {
       app.log.error({ err }, 'LLM生成失败');
@@ -395,13 +428,13 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const rel = db.prepare(`SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?`).get(playerId, thread.character_id) as { player_description: string; created_at: number } | undefined;
-    const recentMsgs = db.prepare(`SELECT sender, body FROM text_messages WHERE thread_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT 10`).all(threadId, lookup.lastPlayer.created_at) as Array<{ sender: string; body: string }>;
+    const recentMsgs = db.prepare(`SELECT sender, body, image_asset_id, metadata FROM text_messages WHERE thread_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT 10`).all(threadId, lookup.lastPlayer.created_at) as Array<{ sender: string; body: string; image_asset_id: string | null; metadata: string | null }>;
 
     let retrievedMemories: string | null = null;
     if (!isDeity) {
       retrievedMemories = await retrieveRelevantMemories(
         playerId, thread.character_id,
-        recentMsgs.map(m => ({ role: m.sender, text: m.body })),
+        recentMsgs.map(m => ({ role: m.sender, text: smsMessageText(m) })),
         textBody,
       );
     }
@@ -419,7 +452,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       chronicleSummary: getUnifiedTimeline(playerId, thread.character_id),
       recentMessages: recentMsgs.reverse().map(m => ({
         role: (m.sender === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
-        text: m.body,
+        text: smsMessageText(m),
       })),
       isTextMessage: true,
       isDeity,
@@ -453,6 +486,16 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
       const npcMsgIds = npcSave.msgIds;
 
+      // 玩家提问触发配图：LLM 输出 image_prompt → 先同步插占位气泡拿 id，再异步出图填图（文字消息已先入库，不阻塞）
+      const replyImagePrompt = reply_data.image_prompt?.trim();
+      const imagePending = !!replyImagePrompt && !isDeity;
+      let imagePendingId: string | undefined;
+      if (imagePending) {
+        imagePendingId = insertProactiveImagePlaceholder(threadId, replyImagePrompt, now(), false);
+        void fillProactiveImage(playerId, threadId, imagePendingId, replyImagePrompt, false)
+          .catch(err => console.error('[sms] 配图生成失败:', err instanceof Error ? err.message : err));
+      }
+
       // 短信记忆折叠（异步，不阻塞响应）
       if (!isDeity) {
         maybeFoldSmsIncremental(threadId, playerId, thread.character_id).catch(() => {});
@@ -481,6 +524,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
           internal_viewed: false,
         })),
         invite,
+        imagePending: imagePending ? { id: imagePendingId } : null,
       });
     } catch (err) {
       app.log.error({ err }, 'LLM生成失败');

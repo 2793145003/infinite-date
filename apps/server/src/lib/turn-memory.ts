@@ -18,13 +18,17 @@
 import { db } from '../db';
 import { genId, now, jsonParse } from './util';
 import { chat, tryParseJsonReply, type ChatMessage } from '../llm/adapter';
-import { embed, storeEmbedding, retrieveMemories } from './embedding';
+import { embed, storeEmbedding, retrieveMemories, cosineSim, blobToFloat32 } from './embedding';
 import { SCENE_SCHEMA_SQL } from './scene-schema';
 
 // ─── 参数（可调）──────────────
 export const HOT_WINDOW_N = 5;   // 最近 N 轮原文（热窗）
 export const MID_I = 12;         // 折叠起点：折叠 12~15 这一段
 export const MID_M = 15;         // 中期上界：角色可见的单轮摘要轮数
+
+// ─── player_facts 提取去重参数 ──────
+export const PLAYER_FACT_KNOWN_LIMIT = 30;  // 提取时注入「本场最近 N 条已提取 fact」做已知信息比对（抑制连续轮次重复）
+const FACT_DUP_THRESHOLD = 0.85;            // 写入端向量去重阈值（与 memory.ts 一致，拦措辞接近的跨场重复）
 
 // ─── 建表（统一走 scene-schema.ts，见 REVIEW_V4.md 🔴-1）───
 let turnMemoryReady = false;
@@ -75,15 +79,48 @@ async function doFoldTurnSegment(opts: {
     .map(t => `${t.role === 'player' ? playerName : opts.characterName}：${t.text}${t.internal ? ` [内心：${t.internal}]` : ''}`)
     .join('\n');
 
+  // 本场最近 N 条已提取 fact（round_no 小于本轮），注入「已知信息比对」抑制连续轮次重复
+  const knownFacts = db.prepare(`
+    SELECT fact FROM turn_player_facts
+    WHERE scene_session_id=? AND character_id=? AND round_no < ?
+    ORDER BY round_no DESC LIMIT ?
+  `).all(opts.sceneSessionId, opts.characterId, opts.roundNo, PLAYER_FACT_KNOWN_LIMIT) as { fact: string }[];
+  const knownBlock = knownFacts.length
+    ? knownFacts.map(f => `- ${f}`).join('\n')
+    : '（暂无）';
+
   const system = `你是一个记忆整理系统。以下是一个约会/场景中「${opts.characterName}」这一角的单轮记录。
 请为「${opts.characterName}」这一角色生成单轮事件摘要。只写这一轮里该角色明确发生/参与的事：他去做什么事、说过什么（若剧情需要）、内心活动。
 - 写出具体的动作、对话要点和场景氛围，不要只概括为"双方进行了互动"这种空话。
 - 允许写角色的情绪反应，但必须基于记录中明确出现的内容，不要推测未见情感。
 - 用第三人称、简短（2-3句）。
-同时 player_facts：从这一轮里提取关于玩家（${playerName}）的持久事实——玩家向${opts.characterName}透露的个人信息、偏好、习惯、性格特征、生活习惯、重要情况。每条一句话，第三人称（"${playerName}…"），只提取明确的、未来仍成立的事实。
-严格排除：玩家发出的提问型/一次性台词（如"你喜欢日出吗""你最近好吗"）不算事实；"明天要去医院复查"这类会发生的具体事项可提取，但纯对话问句不要。不要推测。如果没有，返回空数组。
 
-【关键区分】只提取玩家**实际说出或做出**的事实。角色（${opts.characterName}）对玩家的指控、猜测、误解或主观判断不算玩家事实——例如${opts.characterName}说"你在疏远我"不等于玩家真的在疏远。只有玩家自己明确表达或做出的事才算。\n只输出 JSON。`;
+同时 player_facts：从这一轮里提取关于玩家（${playerName}）的持久事实。只有「换个场景、过一段时间仍然成立」的才算持久事实。
+
+【可提取的范围】
+- 个人信息：年龄、生日、职业、学历、居住地、家庭关系
+- 偏好：玩家明确表达过、长期稳定的喜好或厌恶
+- 健康：长期的身体状况、过敏史、饮食禁忌
+- 事件/约定：玩家与${opts.characterName}之间重要的共同经历、明确约定
+- 价值观：玩家表达的长期信念或目标
+
+【一律不算事实，排除】
+- 当下身体/生理状态：如"现在月经期""此刻不舒服""意识模糊""体力不支"
+- 亲密/性爱过程里的生理反应、身体细节、动作描写——这是过程，不是玩家透露的事实
+- 一次性愿望、当下念头：如"想吃日料""想喝酸奶"
+- 玩家发出的提问、客套、寒暄
+- ${opts.characterName}对玩家的猜测、评价、主观判断（"你在疏远我"不等于玩家真的疏远）
+- 纯动作、旁白、环境描写
+
+【已知信息比对】
+以下是${opts.characterName}已经记住的、关于玩家的事实（本场已提取）：
+<已知信息>
+${knownBlock}
+</已知信息>
+新提取的事实必须和上面逐一比对：相同、相似或冲突的忽略，只提取上面完全没有、且不矛盾的新事实。
+
+每条一句话，第三人称（"${playerName}…"）。没有符合条件的就返回空数组。
+只输出 JSON。`;
   const res = await chat(
     [
       { role: 'system', content: system },
@@ -135,13 +172,24 @@ async function doFoldTurnSegment(opts: {
       INSERT INTO turn_player_facts (id, player_id, character_id, scene_session_id, round_no, fact, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
+    // 写入端向量去重：与已有 fact 相似度 ≥ 阈值则跳过（拦措辞接近的跨场重复，与 memory.ts 同款逻辑）
+    const existingFactRows = db.prepare(`
+      SELECT source_id, embedding FROM memory_embeddings
+      WHERE player_id=? AND character_id=? AND source_type='turn_player_fact'
+    `).all(opts.playerId, opts.characterId) as Array<{ source_id: string; embedding: Uint8Array }>;
+    const existingVecs = existingFactRows.map(r => ({ sourceId: r.source_id, vec: blobToFloat32(r.embedding) }));
     for (const fact of playerFacts) {
+      const fVec = await embed(fact);
+      if (!fVec) continue;
+      let isDup = false;
+      for (const e of existingVecs) {
+        if (cosineSim(fVec, e.vec) >= FACT_DUP_THRESHOLD) { isDup = true; break; }
+      }
+      if (isDup) continue;
       const fId = genId();
       ins.run(fId, opts.playerId, opts.characterId, opts.sceneSessionId, opts.roundNo, fact, now());
-      const fVec = await embed(fact);
-      if (fVec) {
-        storeEmbedding(opts.playerId, opts.characterId, 'turn_player_fact', fId, fact, fVec);
-      }
+      storeEmbedding(opts.playerId, opts.characterId, 'turn_player_fact', fId, fact, fVec);
+      existingVecs.push({ sourceId: fId, vec: fVec });  // 加入列表供本轮后续 fact 去重
     }
   }
 }

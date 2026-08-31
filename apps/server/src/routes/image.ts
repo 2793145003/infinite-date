@@ -91,6 +91,8 @@ function isSharedImage(filename: string): boolean {
   if (db.prepare('SELECT 1 FROM scene_locations WHERE background_image = ? LIMIT 1').get(filename)) return true;
   // 场景背景图：玩家提交池
   if (db.prepare("SELECT 1 FROM scene_locations, json_each(scene_locations.background_submitted) WHERE json_extract(json_each.value, '$.image') = ? LIMIT 1").get(filename)) return true;
+  // 互动小说男主头像：仅已发布（published）小说的角色头像对外公开（公共列表/详情展示）
+  if (db.prepare("SELECT 1 FROM novel_characters c JOIN novels n ON n.id = c.novel_id WHERE c.avatar = ? AND n.status = 'published' LIMIT 1").get(filename)) return true;
   return false;
 }
 

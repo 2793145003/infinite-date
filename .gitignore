@@ -10,22 +10,27 @@ dist/
 .env.*
 !.env.example
 uploads/
-data/*
-!data/hexagrams/
-data/hexagrams/*
-!data/hexagrams/*.json
+data/
 db-backups/
 .agent-admin-credentials
 
 # AB 测试脚本和备份模板 (开发产物)
-apps/server/src/scripts/ab-*.ts
-apps/server/src/scripts/ps-*.ts
-apps/server/src/scripts/repro-*.ts
-apps/server/src/scripts/fn-*.ts
-apps/server/src/scripts/inspect-*.ts
-apps/server/src/scripts/inspect-*.mjs
-apps/server/src/scripts/build-move-gold.cjs
-apps/server/src/scripts/dump-move-samples.*
+apps/server/scripts/ab-*.ts
+apps/server/scripts/ps-*.ts
+apps/server/scripts/repro-*.ts
+apps/server/scripts/fn-*.ts
+apps/server/scripts/inspect-*.ts
+apps/server/scripts/inspect-*.mjs
+apps/server/scripts/build-move-gold.cjs
+apps/server/scripts/dump-move-samples.*
+# fact 清洗 / novel 时间回填等一次性 dev 脚本（不进主分支）
+apps/server/scripts/apply-fact-clean.ts
+apps/server/scripts/test-fact-*.ts
+apps/server/scripts/test-player-fact-prompt.ts
+apps/server/scripts/backfill-novel-time.ts
+apps/server/scripts/fill-novel-time.ts
+apps/server/scripts/fact-clean-out/
+apps/server/scripts/fact-clean-result-*.txt
 apps/server/src/prompt/templates/scene.namer.v*.txt
 apps/server/src/prompt/templates/*.bak.txt
 apps/server/cleanup_orphan_turn.cjs

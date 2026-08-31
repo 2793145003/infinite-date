@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, ArrowLeft, Image as ImageIcon, MapPin, Target } from 'lucide-react';
 import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { imageUrl, api } from '../lib/api';
+import { ImageViewer } from './ImageViewer';
 
 interface SmsThread {
   id: string;
@@ -86,8 +87,9 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
   const [undoing, setUndoing] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [showInternal, setShowInternal] = useState<string | null>(null);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoOpenedRef = useRef<string | null>(null);
@@ -103,8 +105,21 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
     imagePath: m.image_asset_id ?? m.imagePath ?? null,
   });
 
+  // 是否「载入中」的占位图片气泡（图片还没生成完，image_asset_id 尚为空）
+  const isPendingImage = (m: SmsMessage): boolean => {
+    if (!m.metadata) return false;
+    try {
+      return (JSON.parse(m.metadata) as { pending?: boolean }).pending === true;
+    } catch {
+      return false;
+    }
+  };
+
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // 直接钉到底部（scrollTop=scrollHeight 立即跳转）。
+    // 不能用 scrollIntoView({ behavior:'smooth' })——smooth 在初始加载大量消息时会从顶部慢慢滚、甚至不生效，用户反馈"默认翻不到底"。
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   };
 
   const loadThreads = async () => {
@@ -146,6 +161,38 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
     scrollToBottom();
   }, [messages, isSending]);
 
+  // 「载入中」占位图片气泡的局部轮询：图片生成完（约 9 秒）后端会把图填进占位气泡，
+  // 这里定期拉取消息，直到占位气泡都变成真图（或超时约 30 秒）为止。
+  const hasPendingImage = messages.some((m) => isPendingImage(m));
+  useEffect(() => {
+    if (!hasPendingImage || !activeThread || isSending) return;
+    let attempts = 0;
+    const timer = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`/v4/api/sms/threads/${activeThread.id}/messages`);
+        if (!res.ok) return; // 非正常响应（401/500等）不处理
+        const data = await res.json();
+        const next = (data.messages || []).map(mapSmsMessage);
+        // 只替换图片：按 id 把填好的图更新到对应的占位气泡，绝不整体替换整个列表
+        setMessages((prev) =>
+          prev.flatMap((m) => {
+            if (!isPendingImage(m)) return [m];
+            const filled = next.find((n) => n.id === m.id);
+            if (!filled) return []; // 后端已删占位（生成失败）→ 移除占位气泡
+            if (filled.imagePath) return [{ ...m, imagePath: filled.imagePath, metadata: filled.metadata }]; // 图填好了
+            return [m]; // 还在生成，保留「传输中」占位
+          }),
+        );
+        if (!next.some((n: SmsMessage) => isPendingImage(n))) clearInterval(timer);
+      } catch {
+        // 忽略单次失败，下一轮再试
+      }
+      if (attempts >= 12) clearInterval(timer); // 最多约 30 秒
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [hasPendingImage, activeThread, isSending]);
+
   const openThread = async (thread: SmsThread) => {
     setActiveThread(thread);
     setInvite(null);
@@ -166,6 +213,17 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
     setMessages([]);
     setInvite(null);
     loadThreads();
+  };
+
+  // NPC 回复逐条显示（打字机节奏）：每个气泡间隔约 650ms 依次出现，不一次性刷屏
+  // tailPlaceholder：配图在路上时的「传输中」占位气泡，排在最后一条文字之后
+  const appendMessagesGradually = (msgs: SmsMessage[], tailPlaceholder?: SmsMessage) => {
+    const all = tailPlaceholder ? [...msgs, tailPlaceholder] : msgs;
+    all.forEach((msg, idx) => {
+      setTimeout(() => {
+        setMessages((prev) => [...prev, msg]);
+      }, idx * 650);
+    });
   };
 
   const handleSend = async (textToSend?: string, imagePath?: string) => {
@@ -214,12 +272,22 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
         internal_notable: m.internal_notable ? 1 : 0,
       }));
 
-      setMessages((prev) => {
-        const withoutLocal = serverPlayerId
-          ? prev.map((m) => (m.id === localMsg.id ? { ...m, id: serverPlayerId, status: 'delivered' } : m))
-          : prev;
-        return [...withoutLocal, ...npcMsgs];
-      });
+      // 玩家消息先落位（拿到 serverPlayerId），NPC 回复逐条显示（打字机节奏）
+      if (serverPlayerId) {
+        setMessages((prev) => prev.map((m) => (m.id === localMsg.id ? { ...m, id: serverPlayerId, status: 'delivered' } : m)));
+      }
+      // 配图在路上：末尾补一个「传输中」占位气泡，触发轮询直到真图填入
+      const imagePlaceholder: SmsMessage | undefined = data.imagePending
+        ? {
+            id: data.imagePending.id, // 用后端返回的真实占位 id，前后端对齐后轮询才能按 id 只替换图片那一条
+            sender: 'npc',
+            body: '',
+            created_at: Date.now(),
+            status: 'delivered',
+            metadata: JSON.stringify({ pending: true }),
+          }
+        : undefined;
+      appendMessagesGradually(npcMsgs, imagePlaceholder);
 
       if (data.invite) setInvite(data.invite);
       if (data.delayed) showToast('对方正在忙，稍后会回复你');
@@ -319,7 +387,18 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
         internal: m.internal ?? '',
         internal_notable: m.internal_notable ? 1 : 0,
       }));
-      setMessages((prev) => [...prev, ...npcMsgs]);
+      // 配图在路上：末尾补「传输中」占位气泡，触发轮询直到真图填入
+      const imagePlaceholder: SmsMessage | undefined = data.imagePending
+        ? {
+            id: data.imagePending.id, // 用后端返回的真实占位 id，前后端对齐后轮询才能按 id 只替换图片那一条
+            sender: 'npc',
+            body: '',
+            created_at: Date.now(),
+            status: 'delivered',
+            metadata: JSON.stringify({ pending: true }),
+          }
+        : undefined;
+      appendMessagesGradually(npcMsgs, imagePlaceholder);
       setInvite(data.invite ?? null);
     } catch (e) {
       showToast('重试失败');
@@ -502,7 +581,7 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-2 py-2 pb-2">
+      <div ref={listRef} className="flex-1 overflow-y-auto px-2 py-2 pb-2">
         {messages.length === 0 && (
           <div className="text-center text-ink-muted text-xs py-10">还没有消息，发条短信打个招呼吧</div>
         )}
@@ -525,10 +604,10 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
               {!isPlayer && renderAvatar('w-8 h-8 mt-auto')}
               <div className={`flex flex-col ${isPlayer ? 'items-end' : 'items-start'} max-w-[72%]`}>
                 <div
-                  className={`px-3.5 py-2.5 text-[13px] leading-relaxed text-ink whitespace-pre-wrap break-words ${
+                  className={`px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words ${
                     isPlayer
-                      ? 'bg-chat-pink-soft/90 backdrop-blur-md rounded-2xl rounded-tr-sm'
-                      : 'bg-bg-muted backdrop-blur-md rounded-2xl rounded-bl-sm border border-border'
+                      ? 'bg-chat-pink-soft/90 text-ink-on backdrop-blur-md rounded-2xl rounded-tr-sm'
+                      : 'bg-bg-muted text-ink backdrop-blur-md rounded-2xl rounded-bl-sm border border-border'
                   }`}
                 >
                   {msg.metadata && (() => {
@@ -546,9 +625,15 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
                     <img
                       src={imageUrl(msg.imagePath)}
                       alt="图片消息"
-                      className="rounded-xl max-w-full my-0.5 object-contain"
+                      className="rounded-xl max-w-full my-0.5 object-contain cursor-zoom-in"
                       style={{ maxHeight: 220 }}
+                      onClick={() => setViewerSrc(msg.imagePath!)}
                     />
+                  )}
+                  {!msg.imagePath && isPendingImage(msg) && (
+                    <div className="rounded-xl my-0.5 w-40 h-28 bg-bg-muted-2 border border-border flex items-center justify-center gap-1.5 text-ink-muted text-[11px]">
+                      <span className="animate-pulse">⏳</span>传输中…
+                    </div>
                   )}
                   {msg.body}
                 </div>
@@ -654,8 +739,6 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
             </div>
           </div>
         )}
-
-        <div ref={messagesEndRef} />
       </div>
 
       <footer className="px-2.5 pt-2 pb-[81px] shrink-0 sticky bottom-0 z-20">
@@ -717,6 +800,8 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
           {toast}
         </div>
       )}
+
+      {viewerSrc && <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} />}
     </div>
   );
 };

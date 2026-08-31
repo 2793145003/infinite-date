@@ -21,7 +21,8 @@ import type { ChatMessage } from '../llm/adapter';
 import { chat, tryParseJsonReply } from '../llm/adapter';
 import { getCurrentSchedule } from '../lib/schedule';
 import { embed, storeEmbedding } from '../lib/embedding';
-import { resetMomentUrge } from '../lib/proactive';
+import { resetMomentUrge, generateProactiveSmsAboutMoment } from '../lib/proactive';
+import { generateImage } from '../lib/ai-image';
 
 export async function momentRoutes(app: FastifyInstance): Promise<void> {
 
@@ -287,7 +288,9 @@ export async function generateNpcMoment(
 可以是一时感慨、生活分享、吐槽、晒一下什么、或者只是一句没头没尾的话。
 不要长篇大论，朋友圈就是几句话的东西。
 不要@任何人，不要用 hashtag。
-把朋友圈正文放在 messages 数组里，internal 留空即可。）`;
+把朋友圈正文放在 messages 数组里，internal 留空即可。
+
+如果你这条朋友圈想配一张图——比如你看到的景色、吃的东西、去的地方，或者你本人入镜的画面——可以在 image_prompt 里用中文描述这张图的内容。不想配图就把 image_prompt 留空。）`;
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -296,11 +299,13 @@ export async function generateNpcMoment(
 
   try {
     let content = '';
+    let imagePrompt = '';
     for (let attempt = 0; attempt < 2 && !content; attempt++) {
       const result = await chat(messages, { temperature: attempt === 0 ? 0.9 : 1.0, maxTokens: 512, guidedJson: REPLY_SCHEMA, playerId });
       const parsed = tryParseJsonReply(result.content);
       if (parsed?.messages && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
         content = String(parsed.messages[0]).trim();
+        imagePrompt = parsed.image_prompt ? String(parsed.image_prompt).trim() : '';
       } else if (typeof parsed?.internal === 'string' && parsed.internal.trim()) {
         // LLM把内容放到了internal字段，fallback提取
         content = parsed.internal.trim();
@@ -323,17 +328,40 @@ export async function generateNpcMoment(
       VALUES (?, ?, 'character', ?, ?, '', ?, ?, ?)
     `).run(momentId, playerId, characterId, content, locationName, triggerType, now());
 
-    // 存入记忆——朋友圈内容可被语义检索
-    const memText = `${getCharacterName(characterId)}发了朋友圈：${content}${locationName ? `（在${locationName}）` : ''}`;
+    // 存入记忆——朋友圈内容可被语义检索（含配图描述）
+    const memText = `${getCharacterName(characterId)}发了朋友圈：${content}${imagePrompt ? `（配图：${imagePrompt}）` : ''}${locationName ? `（在${locationName}）` : ''}`;
     const memVec = await embed(memText);
     if (memVec) {
       storeEmbedding(playerId, characterId, 'moment', momentId, memText, memVec);
+    }
+
+    // 男主自主配图：image_prompt 非空 → 异步生成，完成后补 moments.image_path
+    if (imagePrompt) {
+      void generateNpcMomentImage(playerId, momentId, characterId, imagePrompt)
+        .catch(err => console.error('[moments] 配图生成失败:', err instanceof Error ? err.message : err));
     }
 
     return momentId;
   } catch {
     return null;
   }
+}
+
+/**
+ * 生成朋友圈配图，完成后补 moments.image_path（正文已先入库，异步不阻塞）。
+ */
+async function generateNpcMomentImage(playerId: string, momentId: string, characterId: string, imagePrompt: string): Promise<void> {
+  // 取角色外貌+性别，配图出现角色本人时 gemma 用它锚定外貌和称呼
+  const charData = loadCharacterData(playerId, characterId);
+  const appearance = charData?.appearance ?? '';
+  const gender = charData?.gender ?? '';
+  const result = await generateImage(playerId, imagePrompt, { scene: true, appearance, gender });
+  if (!result.ok || !result.filename) {
+    console.error('[moments] 配图生成失败:', result.error);
+    return;
+  }
+  db.prepare('UPDATE moments SET image_path = ? WHERE id = ? AND player_id = ?')
+    .run(result.filename, momentId, playerId);
 }
 
 /**
@@ -377,14 +405,34 @@ async function triggerNpcComments(
     if (visibleFriends.length === 0) return;
   }
 
-  // 每个好友有概率评论（50%），模拟"刷到了但不一定评论"
-  // 至少1个NPC评论（如果只有一个可见好友则100%评论）
-  const commentingFriends = visibleFriends.filter(() => visibleFriends.length === 1 || Math.random() < 0.5);
-  if (commentingFriends.length === 0 && visibleFriends.length > 0) {
-    // 确保至少一个评论
-    commentingFriends.push(visibleFriends[0]!);
+  // 1. 所有可见 NPC 都记住"玩家发了朋友圈"（fire-and-forget，不阻塞）
+  const playerMomentText = `玩家发了朋友圈：${momentContent}${momentImagePath ? '（带图）' : ''}`;
+  for (const friend of visibleFriends) {
+    embed(playerMomentText)
+      .then((vec) => {
+        if (vec) storeEmbedding(playerId, friend.character_id, 'moment', momentId, playerMomentText, vec);
+      })
+      .catch(() => {});
   }
 
+  // 2. 每个可见 NPC 有 20% 概率"刷到并想私聊"
+  const dmFriends = visibleFriends.filter(() => Math.random() < 0.2);
+
+  // 3. 私聊的 NPC 不再评论区评论（错开）；其余 50% 概率评论，保底至少 1 个
+  const dmSet = new Set(dmFriends.map((f) => f.character_id));
+  const commentCandidates = visibleFriends.filter((f) => !dmSet.has(f.character_id));
+  let commentingFriends = commentCandidates.filter(() => commentCandidates.length === 1 || Math.random() < 0.5);
+  if (commentingFriends.length === 0 && commentCandidates.length > 0) {
+    // 确保至少一个评论
+    commentingFriends.push(commentCandidates[0]!);
+  }
+
+  // 触发私聊（fire-and-forget）
+  for (const friend of dmFriends) {
+    generateProactiveSmsAboutMoment(playerId, friend.character_id, momentContent).catch(() => {});
+  }
+
+  // 触发评论
   for (const friend of commentingFriends) {
     try {
       const comment = await generateNpcComment(playerId, friend.character_id, momentContent, 'player', playerId, momentId, momentImagePath);

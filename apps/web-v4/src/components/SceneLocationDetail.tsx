@@ -11,6 +11,8 @@ import {
   computeLevel,
   polyBBox,
 } from '../lib/sceneMapGeometry';
+import { BackgroundPicker } from './BackgroundPicker';
+import { api } from '../lib/api';
 
 export function SceneLocationDetail({
   locationId,
@@ -31,22 +33,84 @@ export function SceneLocationDetail({
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+  const [newChildName, setNewChildName] = useState('');
+  const [newChildSummary, setNewChildSummary] = useState('');
+  const [newChildPublic, setNewChildPublic] = useState(true);
+  const [npcRole, setNpcRole] = useState('');
+  const [npcName, setNpcName] = useState('');
+  const [npcPersona, setNpcPersona] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const clipId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
 
-  useEffect(() => {
-    Promise.all([
-      fetch('/v4/api/scene/locations').then((r) => r.json()),
-      fetch('/v4/api/scene/map/npcs').then((r) => r.json()),
-    ])
-      .then(([locData, npcData]) => {
-        const locations: SceneLocationInfo[] = locData.locations ?? [];
-        setAllLocs(locations);
-        setLoc(locations.find((l) => l.id === locationId) ?? null);
-        setAllNpcs(npcData.locations ?? {});
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [locationId]);
+  const load = async () => {
+    try {
+      const [locData, npcData] = await Promise.all([
+        fetch('/v4/api/scene/locations').then((r) => r.json()),
+        fetch('/v4/api/scene/map/npcs').then((r) => r.json()),
+      ]);
+      const locations: SceneLocationInfo[] = locData.locations ?? [];
+      setAllLocs(locations);
+      setLoc(locations.find((l) => l.id === locationId) ?? null);
+      setAllNpcs(npcData.locations ?? {});
+    } catch {}
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [locationId]);
+
+  // 上传/生成地点背景后写回（公共地点进提交池，私有地点直写；用返回的实际 background 更新）
+  const handleBackgroundSelect = async (imagePath: string) => {
+    if (!loc) return;
+    try {
+      const res = await api.setLocationBackground(loc.id, imagePath);
+      setLoc({ ...loc, background: res.background });
+    } catch {
+      alert('保存背景失败，请重试');
+    }
+  };
+
+  const handleBackgroundClear = async () => {
+    if (!loc) return;
+    try {
+      const res = await api.setLocationBackground(loc.id, '');
+      setLoc({ ...loc, background: res.background });
+    } catch {
+      alert('清除背景失败，请重试');
+    }
+  };
+
+  // 添加子地点（写 scene_locations，随后重载让地图/列表同步）
+  const handleAddChild = async () => {
+    if (!loc || !newChildName.trim() || busy) return;
+    setBusy(true); setError('');
+    try {
+      await api.sceneCreateLocation({
+        name: newChildName.trim(),
+        summary: newChildSummary.trim() || undefined,
+        parentId: loc.id,
+        isPublic: newChildPublic,
+      });
+      setNewChildName(''); setNewChildSummary('');
+      await load();
+    } catch (e) {
+      setError((e as Error).message || '添加子地点失败');
+    } finally { setBusy(false); }
+  };
+
+  // 添加路人（按 role 去重覆盖）
+  const handleAddNpc = async () => {
+    if (!loc || !npcRole.trim() || !npcName.trim() || busy) return;
+    setBusy(true); setError('');
+    try {
+      await api.sceneAddNpc(loc.id, { role: npcRole.trim(), name: npcName.trim(), persona: npcPersona.trim() || undefined });
+      setNpcRole(''); setNpcName(''); setNpcPersona('');
+      await load();
+    } catch (e) {
+      setError((e as Error).message || '添加路人失败');
+    } finally { setBusy(false); }
+  };
 
   const childLocs = allLocs.filter((l) => l.parentId === locationId);
   // 子地点卡片列表：点击图形地图分区选中的置顶（只更换排序，不跳转）
@@ -262,6 +326,21 @@ export function SceneLocationDetail({
               </div>
             </div>
 
+            {/* 场景设置入口（弹层：背景 / 子地点 / 路人） */}
+            <button
+              className="mb-4 w-full rounded-xl border border-border frosted-glass p-4 text-left transition hover:border-border-strong"
+              onClick={() => setShowSettings(true)}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-lg">⚙️</span>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-ink">场景设置</div>
+                  <div className="text-xs text-ink-faint">设背景 · 加子地点 · 加路人</div>
+                </div>
+                <span className="text-ink-soft">›</span>
+              </div>
+            </button>
+
             {/* 常驻人员 */}
             {loc.npcs.length > 0 && (
               <div className="mb-4">
@@ -338,6 +417,112 @@ export function SceneLocationDetail({
           onClose={() => setShowInvite(false)}
           onStart={onStartScene}
         />
+      )}
+
+      {showSettings && loc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={() => setShowSettings(false)}>
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div
+            className="relative w-full max-w-sm max-h-[85vh] overflow-y-auto rounded-2xl bg-panel border border-border p-4 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-base font-semibold text-ink">场景设置</div>
+              <button onClick={() => setShowSettings(false)} className="text-ink-faint hover:text-ink cursor-pointer" aria-label="关闭">✕</button>
+            </div>
+
+            {/* 背景图 */}
+            <div className="mb-4">
+              <div className="mb-2 text-xs text-ink-faint">背景图</div>
+              <BackgroundPicker
+                value={loc.background || undefined}
+                onSelect={handleBackgroundSelect}
+                onClear={handleBackgroundClear}
+                generatePlaceholder={loc.summary ? `${loc.name}，${loc.summary}` : loc.name}
+                label="上传 / 生成背景"
+                size={{ width: 768, height: 1344 }}
+              />
+              <div className="mt-1.5 text-[11px] text-ink-faint">
+                {loc.isPublic ? '公开地点：提交进候选池，最先传的自动生效，管理员可挑选。' : '私有地点：只有你能设置。'}
+              </div>
+            </div>
+
+            {/* 添加子地点 */}
+            <div className="mb-4">
+              <div className="mb-2 text-xs text-ink-faint">添加子地点</div>
+              <input
+                className="w-full rounded-lg border border-border bg-bg-soft px-3 py-2 text-sm text-ink outline-none"
+                value={newChildName}
+                onChange={(e) => setNewChildName(e.target.value)}
+                placeholder="地点名称"
+                maxLength={30}
+              />
+              <input
+                className="mt-2 w-full rounded-lg border border-border bg-bg-soft px-3 py-2 text-sm text-ink outline-none"
+                value={newChildSummary}
+                onChange={(e) => setNewChildSummary(e.target.value)}
+                placeholder="这是什么地方？（可选）"
+                maxLength={200}
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-xs text-ink-soft">类型</span>
+                <button
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${newChildPublic ? 'bg-cyan text-ink-on' : 'border border-border text-ink-soft'}`}
+                  onClick={() => setNewChildPublic(true)}
+                >公开</button>
+                <button
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${!newChildPublic ? 'bg-cyan text-ink-on' : 'border border-border text-ink-soft'}`}
+                  onClick={() => setNewChildPublic(false)}
+                >私有</button>
+              </div>
+              <div className="mt-1.5 text-[11px] text-ink-faint">
+                {newChildPublic ? '所有人可见，NPC 可能出现在这里' : '仅自己可见'}
+              </div>
+              <button
+                className="mt-2 w-full rounded-lg bg-rose px-3 py-2 text-sm font-medium text-ink-on"
+                onClick={handleAddChild}
+                disabled={busy || !newChildName.trim()}
+              >
+                添加子地点
+              </button>
+            </div>
+
+            {/* 添加路人 */}
+            <div>
+              <div className="mb-2 text-xs text-ink-faint">添加路人</div>
+              <input
+                className="w-full rounded-lg border border-border bg-bg-soft px-3 py-2 text-sm text-ink outline-none"
+                value={npcRole}
+                onChange={(e) => setNpcRole(e.target.value)}
+                placeholder="身份（如：服务生、摊主）"
+                maxLength={20}
+              />
+              <input
+                className="mt-2 w-full rounded-lg border border-border bg-bg-soft px-3 py-2 text-sm text-ink outline-none"
+                value={npcName}
+                onChange={(e) => setNpcName(e.target.value)}
+                placeholder="名字（如：小周）"
+                maxLength={20}
+              />
+              <input
+                className="mt-2 w-full rounded-lg border border-border bg-bg-soft px-3 py-2 text-sm text-ink outline-none"
+                value={npcPersona}
+                onChange={(e) => setNpcPersona(e.target.value)}
+                placeholder="设定（可选）"
+                maxLength={200}
+              />
+              <button
+                className="mt-2 w-full rounded-lg bg-rose px-3 py-2 text-sm font-medium text-ink-on"
+                onClick={handleAddNpc}
+                disabled={busy || !npcRole.trim() || !npcName.trim()}
+              >
+                添加路人
+              </button>
+            </div>
+
+            {error && <div className="mt-3 text-xs text-rose">{error}</div>}
+          </div>
+        </div>
       )}
     </div>
   );

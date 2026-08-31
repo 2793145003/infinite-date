@@ -241,6 +241,37 @@
   background: rgba(59, 130, 246, 0.6);
 }
 
+/* 互动小说【玩家】胶囊：原子 token，删除整块删（contenteditable=false） */
+.player-chip {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--ink-on);
+  font-size: 0.9em;
+  line-height: 1.4;
+  vertical-align: baseline;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.player-chip-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-mute);
+  pointer-events: none;
+}
+
+/* 所有输入框文字 + placeholder 统一跟随主题（兜底，覆盖没显式 text-ink 的裸 input/textarea） */
+input, textarea {
+  color: var(--text);
+}
+input::placeholder, textarea::placeholder {
+  color: var(--text-mute);
+  opacity: 1;
+}
+
 /* 摸鱼模式打字动画（三点跳动） */
 .fish-typing-dot {
   width: 5px;
@@ -287,8 +318,8 @@
   --glass-edge: rgba(255,255,255,0.2);
 
   --text: #e8e6f0;
-  --text-dim: #a8a4b8;
-  --text-mute: #9a98b0;
+  --text-dim: #b6b2c6;
+  --text-mute: #aaa8bc;
 
   --amber: #e8a838;
   --amber-dim: #8a6420;

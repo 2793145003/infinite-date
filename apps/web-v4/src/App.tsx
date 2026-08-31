@@ -18,6 +18,7 @@ import { FishMode } from './components/FishMode';
 import { LoginScreen } from './components/LoginScreen';
 import { api, getToken, setToken, setAuthFailHandler, clearToken } from './lib/api';
 import type { PlayerInfo, CharacterData, MyCharacterSummary } from './lib/api';
+import { syncHomeBgFromServer } from './lib/themes';
 import { SceneMapScreen } from './components/SceneMapScreen';
 import { SceneLocationDetail } from './components/SceneLocationDetail';
 import { SceneExploreScreen } from './components/SceneExploreScreen';
@@ -30,6 +31,9 @@ import { ScenarioSceneList } from './components/ScenarioSceneList';
 import { ScenarioSceneDetail } from './components/ScenarioSceneDetail';
 import { ScenarioSceneApp } from './components/ScenarioSceneApp';
 import { ScenarioEditor } from './components/ScenarioEditor';
+import { NovelList } from './components/NovelList';
+import { NovelEditor } from './components/NovelEditor';
+import { NovelPlay } from './components/NovelPlay';
 import {
   Character,
   ChatMessage,
@@ -178,6 +182,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [charactersVersion, setCharactersVersion] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [smsUnread, setSmsUnread] = useState(0);
   const [fishToggle, setFishToggle] = useState<boolean>(() => {
     try {
       return localStorage.getItem('idate_fish_toggle') === '1';
@@ -193,6 +198,8 @@ export default function App() {
   const [scenarioSessionId, setScenarioSessionId] = useState<string | null>(null);
   const [scenarioDetailId, setScenarioDetailId] = useState<string | null>(null);
   const [scenarioEditorId, setScenarioEditorId] = useState<string | null>(null);
+  const [novelSessionId, setNovelSessionId] = useState<string | null>(null);
+  const [novelEditorId, setNovelEditorId] = useState<string | null>(null);
   const [activity, setActivity] = useState<ActivityState>({ kind: 'idle' });
 
   // 登录态：token + 玩家信息
@@ -283,6 +290,8 @@ export default function App() {
         if (p.name) {
           setUserProfile((prev) => ({ ...prev, name: p.name }));
         }
+        // 壁纸入库：本地为空时用后端 home_bg 恢复（localStorage 被误删后兜底）
+        syncHomeBgFromServer(p.home_bg);
       } catch (e) {
         console.error('加载玩家信息失败', e);
       }
@@ -304,6 +313,23 @@ export default function App() {
       cancelled = true;
     };
   }, [token, activeTab]);
+
+  // 短信未读角标：登录后拉取 + 每 30 秒刷新（底部导航「聊天」tab 显示未读数量）
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const load = () => {
+      api.unreadSms()
+        .then((res) => { if (!cancelled) setSmsUnread(res.count || 0); })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 30 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [token]);
 
   const handleLogin = (newToken: string, newPlayer: PlayerInfo) => {
     // 登录新账号前，清理上一个账号的 per-account 本地状态（防跨账号串号）
@@ -443,32 +469,12 @@ export default function App() {
     }
   };
 
-  const handleImportCharacter = (charData: Partial<Character>) => {
-    const newChar: Character = {
-      id: `char-${Date.now()}`,
-      name: charData.name || '导入角色',
-      nickname: charData.nickname || charData.name || '角色',
-      gender: charData.gender || '男',
-      identity: charData.identity || '虚拟角色',
-      tag: charData.tag || '角色',
-      avatar: charData.name?.slice(-1) || '伴',
-      personaPrompt:
-        charData.personaPrompt ||
-        `一. 基础信息\n· 姓名：${charData.name}\n· 身份：${charData.identity || '角色'}\n· 性格：体贴温柔、只属于你一人。`,
-      wechatAccount: {
-        id: charData.wechatAccount?.id || `Char_${Math.floor(1000 + Math.random() * 9000)}`,
-        passwordVal: charData.wechatAccount?.passwordVal || 'Pass2026',
-      },
-      status: '刚刚上线 · 伴你身侧',
-      relationshipStatus: '心动相守中',
-      daysTogether: 1,
-      startDate: '2026.08.18',
-      intimacyLevel: 70,
-      currentLocation: '温馨居所',
-    };
-    setCharacters((prev) => [newChar, ...prev]);
-    setActiveCharacterId(newChar.id);
-    showToast(`已成功导入角色：${newChar.name}`);
+  const handleImportCharacter = async (jsonText: string) => {
+    // 走真实后端 /creation/import：按 CharacterData 格式落库（权限校验 + 角色卡 + 关系 + 家 + 广场），
+    // 与「角色创建/编辑」共用同一套字段。失败抛错由 CharacterArchiveScreen 弹窗内展示。
+    const res = await api.importCharacter(jsonText, true);
+    setCharactersVersion((v) => v + 1);
+    showToast(`已成功导入角色：${res.characterName}`);
   };
 
   const handleResetData = () => {
@@ -518,6 +524,7 @@ export default function App() {
               onSelectCharacter={handleSelectActiveCharacter}
               onOpenChat={() => setActiveTab('chat')}
               onOpenMapDating={() => setActiveTab('map-dating')}
+              onOpenNovel={() => setActiveTab('novels')}
               onOpenScenarios={() => setActiveTab('scenarios')}
               onOpenTasks={() => setActiveTab('task-world')}
               onOpenCharacterArchive={() => setActiveTab('archive')}
@@ -598,6 +605,31 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'novels' && (
+            <NovelList
+              onBack={() => setActiveTab('home')}
+              onOpenEditor={(id) => { setNovelEditorId(id); setActiveTab('novel-editor'); }}
+              onOpenPlay={(sid) => { setNovelSessionId(sid); setActiveTab('novel-play'); }}
+              currentPlayerId={player?.id ?? null}
+            />
+          )}
+
+          {activeTab === 'novel-editor' && (
+            <NovelEditor
+              novelId={novelEditorId}
+              onBack={() => { setNovelEditorId(null); setActiveTab('novels'); }}
+              onEnter={(sid) => { setNovelSessionId(sid); setActiveTab('novel-play'); }}
+            />
+          )}
+
+          {activeTab === 'novel-play' && novelSessionId && (
+            <NovelPlay
+              sessionId={novelSessionId}
+              onBack={() => { setNovelSessionId(null); setActiveTab('novels'); }}
+              onEdit={(id) => { setNovelEditorId(id); setActiveTab('novel-editor'); }}
+            />
+          )}
+
           {activeTab === 'scenery-view' && (
             <SceneryViewScreen
               title={sceneryChapterTitle}
@@ -674,6 +706,7 @@ export default function App() {
               onNavigate={(view) => {
                 if (view.type === 'feedback') setActiveTab('feedback');
                 else if (view.type === 'admin') setActiveTab('admin');
+                else if (view.type === 'experimental') setActiveTab('novels');
               }}
               onToggleFish={handleToggleFish}
             />
@@ -698,7 +731,7 @@ export default function App() {
         )}
 
         {/* Floating Bottom Navigation（弹窗打开时隐藏，避免透过半透明卡片露出来） */}
-        {!editingId && <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />}
+        {!editingId && <Navigation activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={smsUnread} />}
 
         {/* Toast Notification */}
         {toastMessage && (

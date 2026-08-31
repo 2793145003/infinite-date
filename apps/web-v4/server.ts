@@ -20,11 +20,6 @@ async function startServer() {
     next();
   });
 
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString() });
-  });
-
   // 代理中间件：把 /api/* 请求转发到 v2 真实后端（3000 端口）
   // 注意：express.json() 已消费 body，必须从 req.body 重新序列化转发，
   // 否则 req.pipe 转发空 body + 旧 Content-Length 会让后端一直等 body 而挂起

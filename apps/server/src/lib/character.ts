@@ -31,8 +31,8 @@ export function loadCharacterData(playerId: string, characterId: string): Charac
     return jsonParse<CharacterData | null>(pubChar.character_data, null);
   }
 
-  // 3. 私有角色（by ID）
-  const privChar = db.prepare('SELECT character_data FROM character_player_data WHERE id = ?').get(characterId) as { character_data: string } | undefined;
+  // 3. 私有角色（by ID，必须归属当前玩家——否则是越权读取他人私有角色卡）
+  const privChar = db.prepare('SELECT character_data FROM character_player_data WHERE id = ? AND player_id = ?').get(characterId, playerId) as { character_data: string } | undefined;
   if (privChar) {
     return jsonParse<CharacterData | null>(privChar.character_data, null);
   }

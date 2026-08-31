@@ -20,8 +20,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: '邀请码无效或已吊销' });
     }
 
-    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, tutorial_step, is_admin FROM players WHERE id = ?').get(playerId) as {
-      id: string; name: string; pronouns: string; gender: string; appearance: string; tutorial_step: number; is_admin: number;
+    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, avatar, tutorial_step, is_admin FROM players WHERE id = ?').get(playerId) as {
+      id: string; name: string; pronouns: string; gender: string; appearance: string; avatar: string; tutorial_step: number; is_admin: number;
     } | undefined;
 
     if (!player) {
@@ -51,6 +51,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         pronouns: player.pronouns,
         gender: player.gender,
         appearance: player.appearance,
+        avatar: player.avatar,
         tutorial_step: player.tutorial_step,
         is_admin: !!player.is_admin,
       },
@@ -71,8 +72,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'token无效' });
     }
 
-    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, tutorial_step, rating_score, is_admin FROM players WHERE id = ?').get(playerId) as {
-      id: string; name: string; pronouns: string; gender: string; appearance: string; tutorial_step: number; rating_score: number; is_admin: number;
+    const player = db.prepare('SELECT id, name, pronouns, gender, appearance, avatar, tutorial_step, rating_score, is_admin FROM players WHERE id = ?').get(playerId) as {
+      id: string; name: string; pronouns: string; gender: string; appearance: string; avatar: string; tutorial_step: number; rating_score: number; is_admin: number;
     } | undefined;
 
     if (!player) {
@@ -89,6 +90,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         pronouns: player.pronouns,
         gender: player.gender,
         appearance: player.appearance,
+        avatar: player.avatar,
         tutorial_step: player.tutorial_step,
         rating_score: player.rating_score,
         is_admin: !!player.is_admin,

@@ -81,6 +81,7 @@ export interface LlmStructuredReply {
   current_location?: string; // 本轮结束时角色所在地点名称（移动了才填，没移动留空）
   need_search?: boolean; // NPC判断是否需要搜索记忆（短输入/nudge时）
   search_query?: string; // need_search=true时的检索query
+  image_prompt?: string; // 可选：男主主动想配图的场景描述（中文，只描述景/物，绝不含人）。空/缺省=不配图
 }
 
 // ─── 常量 ────────────────────────────────────────────────

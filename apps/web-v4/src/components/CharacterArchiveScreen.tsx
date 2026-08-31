@@ -13,7 +13,7 @@ interface CharacterArchiveScreenProps {
   onDeleteCharacter: (characterId: string) => void;
   onDeleteFriend: (characterId: string) => void;
   onResetFork: (characterId: string) => void;
-  onImportCharacter: (characterData: Partial<Character>) => void;
+  onImportCharacter: (jsonText: string) => Promise<void>;
   onStartChat: (character: Character) => void;
 }
 
@@ -53,18 +53,19 @@ export const CharacterArchiveScreen: React.FC<CharacterArchiveScreenProps> = ({
       return a.name.localeCompare(b.name, 'zh-CN');
     });
 
-  const handleImportSubmit = () => {
+  const handleImportSubmit = async () => {
     try {
       setImportError('');
+      // 本地先校验 JSON 可解析 + 含 name（其余字段后端 buildCharacterData 兜底）
       const parsed = JSON.parse(importJsonText);
       if (!parsed.name) {
         throw new Error('导入数据中必须包含角色姓名(name)');
       }
-      onImportCharacter(parsed);
+      await onImportCharacter(importJsonText);
       setShowImportModal(false);
       setImportJsonText('');
     } catch (err: any) {
-      setImportError(err.message || 'JSON格式解析失败，请检查数据结构');
+      setImportError(err.message || '导入失败，请检查数据格式');
     }
   };
 
@@ -297,13 +298,13 @@ export const CharacterArchiveScreen: React.FC<CharacterArchiveScreenProps> = ({
               <span>导入角色数据</span>
             </h3>
             <p className="text-[11px] text-ink mb-2.5">
-              粘贴标准 JSON 人设数据，支持直接导入提示词与微信账号信息。
+              粘贴标准 JSON 角色卡（CharacterData 格式，与创建/编辑共用同一套字段）。仅 <code className="font-mono">name</code> 必填，其余可省略。
             </p>
 
             <textarea
               value={importJsonText}
               onChange={(e) => setImportJsonText(e.target.value)}
-              placeholder={`{\n  "name": "陆沉",\n  "nickname": "陆先生",\n  "gender": "男",\n  "identity": "集团总监",\n  "tag": "老公",\n  "personaPrompt": "冷静克制，只对你一人展现无底线的偏爱..."\n}`}
+              placeholder={`{\n  "name": "陆沉",\n  "gender": "male",\n  "age": "28",\n  "appearance": "……",\n  "personality": { "surface": "……", "core": "……", "extreme": "……" },\n  "speechStyle": { "description": "……", "examples": [{ "context": "……", "line": "……" }] },\n  "textingStyle": { "description": "……", "examples": ["……"] },\n  "background": { "origin": "……", "shaping": "……", "current": "……" },\n  "emotional_signals": { "nervous": "……", "happy": "……", "angry": "……", "moved": "……", "defensive": "……" },\n  "likes": ["……"],\n  "dislikes": ["……"],\n  "boundaries": "……",\n  "goals": "……",\n  "quirks": "……",\n  "backstory_milestones": [{ "label": "……", "time_description": "……", "summary": "……", "diff": {}, "dramatic_potential": "medium" }],\n  "player_relation": "……",\n  "skills": "……",\n  "ineptitudes": "……",\n  "sleepType": "night_owl"\n}`}
               rows={6}
               className="w-full p-2.5 rounded-lg border border-border text-xs font-mono text-ink outline-none mb-2 focus:border-border-dark"
             />

@@ -106,6 +106,16 @@ migration('players_gender_appearance', () => {
   db.exec("ALTER TABLE players ADD COLUMN appearance TEXT NOT NULL DEFAULT ''");
 });
 
+// migration: players 加 home_bg 列（主页背景壁纸，存 HomeBg JSON；空 = 无自定义壁纸）
+migration('players_home_bg', () => {
+  db.exec("ALTER TABLE players ADD COLUMN home_bg TEXT NOT NULL DEFAULT ''");
+});
+
+// migration: players 加 avatar 列（玩家头像，存 image_blobs 文件名；空 = 用名字首字占位）
+migration('players_avatar', () => {
+  db.exec("ALTER TABLE players ADD COLUMN avatar TEXT NOT NULL DEFAULT ''");
+});
+
 // migration: messages 加 speaker 列（群聊场景标识NPC身份）
 migration('messages_speaker', () => db.exec('ALTER TABLE messages ADD COLUMN speaker TEXT'));
 
@@ -235,6 +245,18 @@ migration('moments_visibility', () => {
   db.exec("ALTER TABLE moments ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'");
   db.exec("ALTER TABLE moments ADD COLUMN visible_to TEXT NOT NULL DEFAULT '[]'");
 });
+
+// migration: novel_characters 加 gender 列（角色性别，空=未指定）
+migration('novel_characters_gender', () => db.exec("ALTER TABLE novel_characters ADD COLUMN gender TEXT NOT NULL DEFAULT ''"));
+
+// migration: novel_characters 加 avatar 列（角色头像文件名，空=无）
+migration('novel_characters_avatar', () => db.exec("ALTER TABLE novel_characters ADD COLUMN avatar TEXT NOT NULL DEFAULT ''"));
+
+// migration: novel_turns 加 time 列（该段发生的时间「第N天·时段」，续写时单拎注入当前时间）
+migration('novel_turns_time', () => db.exec("ALTER TABLE novel_turns ADD COLUMN time TEXT NOT NULL DEFAULT ''"));
+
+// migration: novel_characters 加 emotional_anchor 列（情绪表达锚点，独立于人设，OOC 修复）
+migration('novel_characters_emotional_anchor', () => db.exec("ALTER TABLE novel_characters ADD COLUMN emotional_anchor TEXT NOT NULL DEFAULT ''"));
 
 // 写入默认设置
 const insertSetting = db.prepare(

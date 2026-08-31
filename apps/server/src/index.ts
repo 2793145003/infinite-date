@@ -25,6 +25,7 @@ import { meRoutes } from './routes/me';
 import { momentRoutes } from './routes/moments';
 import { uploadRoutes } from './routes/upload';
 import { imageRoutes } from './routes/image';
+import { aiImageRoutes } from './routes/ai-image';
 import { fishRoutes } from './routes/fish';
 import { feedbackRoutes } from './routes/feedback';
 import { exploreRoutes } from './routes/explore';
@@ -34,6 +35,8 @@ import { sceneRoutes } from './routes/scene';
 import { sceneNamedRoutes } from './routes/scene-named';
 import { sceneExploreRoutes } from './routes/scene-explore';
 import { sceneScenarioRoutes } from './routes/scene-scenario';
+import { novelRoutes } from './routes/novel';
+import { homePoemRoutes } from './routes/home-poem';
 
 const app = Fastify({
   logger: {
@@ -72,6 +75,7 @@ async function start() {
       await momentRoutes(api);
       await uploadRoutes(api);
       await imageRoutes(api);
+      await aiImageRoutes(api);
       await fishRoutes(api);
       await feedbackRoutes(api);
       await exploreRoutes(api);
@@ -81,15 +85,17 @@ async function start() {
       await sceneNamedRoutes(api);
       await sceneExploreRoutes(api);
       await sceneScenarioRoutes(api);
+      await novelRoutes(api);
+      await homePoemRoutes(api);
 
       // 健康检查（前端连接监测用，无认证）
-      api.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
+      api.get('/health', async () => ({ status: 'ok', timestamp: Date.now(), imageGenEnabled: Boolean(config.ideogramUrl) }));
     },
     { prefix: '/api' },
   );
 
   // 健康检查
-  app.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
+  app.get('/health', async () => ({ status: 'ok', timestamp: Date.now(), imageGenEnabled: Boolean(config.ideogramUrl) }));
 
   app.setErrorHandler((err, req, reply) => {
     app.log.error({ err }, '请求处理错误');

@@ -53,7 +53,8 @@
   "scene_concluded": false,
   "current_location": "",
   "need_search": false,
-  "search_query": ""
+  "search_query": "",
+  "image_prompt": ""
 }
 
 - messages: {{message_rule}}。不要用引号（""「」『』）包裹台词，直接写纯文本
@@ -64,3 +65,4 @@
 - current_location: 本轮结束时你们所在的地点名称。没移动就填当前地点名（和上方"地点"一致即可），移动了就填新地点名（必须是主城地点列表中的名字，或玩家创建的地点名）
 - need_search: 是否需要搜索记忆。大多数情况false。仅当对话缺乏话题、玩家回复很短、或你需要素材推进时填true
 - search_query: need_search为true时，写出你想搜索的内容。如"玩家喜欢什么""我们有什么约定""上次约会"
+- image_prompt: {{image_gen_instruction}}

@@ -254,7 +254,7 @@ export function ArchiveView({ kind, characterId }: { kind: ArchiveKind; characte
           <div
             className={`max-w-[78%] px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
               isPlayer
-                ? 'bg-chat-pink-soft/90 backdrop-blur-md rounded-2xl rounded-tr-sm text-ink'
+                ? 'bg-chat-pink-soft/90 backdrop-blur-md rounded-2xl rounded-tr-sm text-ink-on'
                 : 'frosted-glass border border-border rounded-2xl rounded-bl-sm text-ink'
             }`}
           >

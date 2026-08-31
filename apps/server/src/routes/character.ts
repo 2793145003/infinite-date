@@ -13,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { db } from '../db';
 import { requireAuth } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
-import { loadCharacterData } from '../lib/character';
+import { loadCharacterData, getCharacterAvatar } from '../lib/character';
 import type { CharacterData } from '@idate/shared';
 
 export async function characterRoutes(app: FastifyInstance): Promise<void> {
@@ -29,6 +29,10 @@ export async function characterRoutes(app: FastifyInstance): Promise<void> {
     if (!data) {
       return reply.code(404).send({ error: '角色不存在' });
     }
+
+    // 头像统一走 getCharacterAvatar（fork 空头像回退公共版 + safeAvatar 文件存在性兜底），
+    // 与短信页/场景页一致，避免「角色档案页与聊天页头像不一致」。
+    data.avatar = getCharacterAvatar(playerId, characterId);
 
     // 越权防护：私有角色（不在公共 characters 表）必须是当前玩家自己的，
     // 否则任何人凭 id 都能读取他人私密角色设定。

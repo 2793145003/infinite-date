@@ -25,6 +25,13 @@ export const config = {
   // CORS
   corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:8080,http://localhost:5173').split(','),
 
+  // Krea 2 Turbo 生图服务（独立容器，通过公网/穿透地址访问；空串=未启用）
+  // 注：环境变量名沿用 IDEOGRAM_*（历史命名），值指向 Krea 2 服务。
+  ideogramUrl: process.env.IDEOGRAM_URL || '',
+  ideogramApiKey: process.env.IDEOGRAM_API_KEY || '',
+  ideogramWidth: parseInt(process.env.IDEOGRAM_WIDTH || '1024', 10),
+  ideogramHeight: parseInt(process.env.IDEOGRAM_HEIGHT || '1024', 10),
+
   dataDir,
   uploadsDir: path.join(dataDir, 'uploads'),
   promptTemplatesDir: path.resolve(process.cwd(), 'src/prompt/templates'),

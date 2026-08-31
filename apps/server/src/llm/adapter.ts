@@ -126,8 +126,11 @@ async function countPromptTokens(llm: { baseUrl: string; model: string }, apiMes
   }
 
   try {
-    // vLLM /tokenize 支持 messages 参数（带 chat template）
-    const res = await fetch(`${llm.baseUrl.replace(/\/+$/, '')}/tokenize`, {
+    // vLLM /tokenize 支持 messages 参数（带 chat template）。
+    // 注意：tokenize 端点在 vLLM server root（/tokenize），不在 OpenAI 兼容的 /v1 路径下，
+    // 拼 /v1/tokenize 会 404 → 回退字符估算 → 英文长 prompt 被高估 4 倍 → maxTokens 被砍到 128。
+    const tokenizeUrl = llm.baseUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '') + '/tokenize';
+    const res = await fetch(tokenizeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: llm.model, messages: apiMessages }),
@@ -254,6 +257,98 @@ export async function chat(
         }
       : undefined,
   };
+}
+
+/**
+ * 流式 chat：stream: true，逐 token yield delta 文本。
+ * 与 chat() 相同的 token 预算逻辑；不返回结构化结果，调用方自行累积。
+ * 用于续写等「边生成边显示」场景（打字机节奏）。
+ */
+export async function* chatStream(
+  messages: ChatMessage[],
+  opts?: {
+    temperature?: number;
+    maxTokens?: number;
+    signal?: AbortSignal;
+    callType?: string;
+    sessionId?: string;
+    playerId?: string;
+  },
+): AsyncGenerator<string, void, undefined> {
+  const llm = getEffectiveLlmConfig(opts?.playerId);
+  const apiMessages = buildApiMessages(messages);
+
+  const requestedMax = opts?.maxTokens ?? 1024;
+  const estimatedPrompt = await countPromptTokens(llm, apiMessages);
+  const budget = MAX_MODEL_LEN - 256 - estimatedPrompt;
+  const maxTokens = budget < requestedMax ? Math.max(128, budget) : requestedMax;
+
+  const res = await fetch(`${llm.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(llm.apiKey ? { Authorization: `Bearer ${llm.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      model: llm.model,
+      messages: apiMessages,
+      temperature: opts?.temperature ?? 0.8,
+      max_tokens: maxTokens,
+      repetition_penalty: 1.1,
+      stream: true,
+    }),
+    signal: opts?.signal ?? AbortSignal.timeout(120_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`LLM endpoint returned ${res.status} ${res.statusText}: ${text.slice(0, 500)}`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('LLM stream: no response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') return;
+        try {
+          const json = JSON.parse(payload);
+          const delta = json.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string' && delta) {
+            content += delta;
+            yield delta;
+          }
+        } catch {
+          /* 忽略坏帧 */
+        }
+      }
+    }
+  } finally {
+    // 流式也落 llm_call_log（usage 流式拿不到，tokens 记 null），供排查生成问题
+    try {
+      const now = Date.now();
+      db.prepare('DELETE FROM llm_call_log WHERE created_at < ?').run(now - 86_400_000);
+      db.prepare(`INSERT INTO llm_call_log
+        (created_at, call_type, session_id, model, messages_json, raw_response, parsed_json, tokens_in, tokens_out, finish_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(now, opts?.callType ?? null, opts?.sessionId ?? null, llm.model, JSON.stringify(messages), content, null, null, null, null);
+    } catch (err) {
+      console.warn('[llm_call_log] write failed:', err instanceof Error ? err.message : err);
+    }
+  }
 }
 
 /**

@@ -8,6 +8,7 @@ import { tryParseJsonReply, chat, type ChatMessage } from '../llm/adapter';
 import { DEITY_ID } from '@idate/shared';
 import { db } from '../db';
 import { getLocationPath } from '../routes/location';
+import { config } from '../config';
 
 /**
  * vLLM guided_json schema — 从源头约束LLM输出合法JSON
@@ -24,6 +25,7 @@ export const REPLY_SCHEMA = {
     current_location: { type: 'string' },
     need_search: { type: 'boolean' },
     search_query: { type: 'string' },
+    image_prompt: { type: 'string' },
   },
   required: ['messages', 'internal', 'internal_notable', 'player_description', 'scene_concluded'],
 };
@@ -143,6 +145,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // 组装地点文本：优先显示当前地点（移动后的），否则显示起始地点
   const locationText = ctx.currentLocationName || ctx.locationName || '';
 
+  // 生图是否可用：未配置生图服务时，明确告诉 NPC 不要分享图片
+  const imageGenInstruction = config.ideogramUrl
+    ? '当你想要分享图片时，用中文描述图片的内容。如果画面里出现你自己，用你的性别和外貌特征来描述，不要省略。'
+    : '（生图功能未启用：不要分享图片，image_prompt 始终留空）';
+
   const rendered = renderPrompt(tpl, {
     character_name: char.name,
     character_card: characterCard,
@@ -157,6 +164,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     relationship_duration: ctx.relationshipDuration ?? '',
     narrative_rules: narrativeRules,
     message_rule: messageRule,
+    image_gen_instruction: imageGenInstruction,
   });
   if (ctx.situationalNote) return rendered + '\n\n' + ctx.situationalNote;
   return rendered;
@@ -181,6 +189,27 @@ export function buildMessages(
 
   messages.push({ role: 'user', content: currentPlayerInput });
   return messages;
+}
+
+/**
+ * 把一条短信消息转成给 LLM 看的文本。
+ * 图片消息（image_asset_id 非空）用 metadata.image_prompt（图的文字描述）替代，
+ * 让 NPC 后续回复时知道自己发过/收到过什么图。
+ * 玩家发图时可能同时配了文字（body 非空），此时别把文字丢掉。
+ */
+export function smsMessageText(m: { sender: string; body: string; image_asset_id?: string | null; metadata?: string | null }): string {
+  if (!m.image_asset_id) return m.body;
+  let prompt = '';
+  if (m.metadata) {
+    try {
+      const meta = JSON.parse(m.metadata) as { image_prompt?: string };
+      prompt = (meta.image_prompt ?? '').trim();
+    } catch {
+      prompt = '';
+    }
+  }
+  const imgDesc = prompt ? `（照片：${prompt}）` : '（照片）';
+  return m.body ? `${m.body}${imgDesc}` : imgDesc;
 }
 
 /**
@@ -294,6 +323,8 @@ export async function generateReply(
 export function formatCharacterCard(char: CharacterData): string {
   const tpl = loadPrompt('character-card');
   return renderPrompt(tpl, {
+    gender: char.gender === 'female' ? '女' : '男', // 旧数据缺失视为男性
+    appearance: char.appearance?.trim() || '未设定',
     personality: formatPersonality(char),
     speech_style: formatSpeechStyle(char),
     texting_style: formatTextingStyle(char),
@@ -422,6 +453,7 @@ function normalizeReply(raw: Record<string, unknown>): LlmStructuredReply {
     current_location: raw.current_location ? String(raw.current_location).trim() : '',
     need_search: Boolean(raw.need_search),
     search_query: raw.search_query ? String(raw.search_query).trim() : '',
+    image_prompt: raw.image_prompt ? String(raw.image_prompt).trim() : '',
   };
 }
 

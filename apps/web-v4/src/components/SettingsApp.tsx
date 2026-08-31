@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { PlayerInfo } from '../lib/api';
-import { api, clearToken } from '../lib/api';
-import { ImageUploadButton } from './ImageUploadButton';
+import { api, clearToken, imageUrl } from '../lib/api';
+import { BackgroundPicker } from './BackgroundPicker';
+import { ImageViewer } from './ImageViewer';
 import { soundManager } from '../utils/audio';
 import { THEMES, getTheme, setTheme, type ThemeId, FONT_SCALES, getFontScale, setFontScale, type FontScaleId, getFishToggle, setFishToggle, getCustomTheme, applyCustomTheme, DEFAULT_CUSTOM_THEME, type CustomTheme, HOME_BG_PRESETS, V3_WALLPAPERS, getHomeBg, setHomeBg, clearHomeBg, type HomeBg, getBgOverlay, setBgOverlay, DEFAULT_BG_OVERLAY, BG_OVERLAY_MAX } from '../lib/themes';
 
@@ -17,13 +18,21 @@ export function SettingsApp({
   onBack: () => void;
   onLogout: () => void;
   onUpdate: () => void;
-  onNavigate?: (view: { type: 'feedback' | 'archived' | 'admin' }) => void;
+  onNavigate?: (view: { type: 'feedback' | 'archived' | 'admin' | 'experimental' }) => void;
   onToggleFish: () => void;
 }) {
   const [name, setName] = useState(player.name);
   const [gender, setGender] = useState(player.gender || 'female');
   const [appearance, setAppearance] = useState(player.appearance || '');
   const [savingName, setSavingName] = useState(false);
+  // 头像
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [generatingAvatar, setGeneratingAvatar] = useState(false);
+  const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
+  const [canGenerate, setCanGenerate] = useState(false);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   // 声音开关（v4 独有）
   const [isMuted, setIsMuted] = useState(soundManager.getMuted());
   const [theme, setThemeState] = useState<ThemeId>(getTheme());
@@ -52,6 +61,58 @@ export function SettingsApp({
   }, []);
 
   const showMsg = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 4000); };
+
+  useEffect(() => {
+    api.getImageGenEnabled().then(setCanGenerate);
+  }, []);
+
+  const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setShowAvatarMenu(false);
+    setUploadingAvatar(true);
+    try {
+      const res = await api.uploadImage(file);
+      await api.updatePlayer({ avatar: res.imagePath });
+      await onUpdate();
+      showMsg('头像已更新');
+    } catch (err) {
+      showMsg((err as Error).message);
+    } finally {
+      setUploadingAvatar(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleGenerateAvatar = async () => {
+    // 用输入框当前的外貌（本地 state），而非已保存的 player.appearance——
+    // 否则用户刚填了外貌还没点「保存」就生成头像时，会 fallback 到「年轻男性/年轻女性」，
+    // 丢掉发色瞳色等特征（如白发蓝眼 → 随机生成黑发）。
+    const appearanceText = (appearance || '').trim();
+    const prompt = appearanceText || (gender === 'male' ? '年轻男性' : '年轻女性');
+    setShowAvatarMenu(false);
+    setGeneratingAvatar(true);
+    try {
+      const res = await api.generateImage(prompt, { gender });
+      setPendingAvatar(res.imagePath);
+    } catch (err) {
+      showMsg((err as Error).message);
+    } finally {
+      setGeneratingAvatar(false);
+    }
+  };
+
+  const applyPendingAvatar = async () => {
+    if (!pendingAvatar) return;
+    try {
+      await api.updatePlayer({ avatar: pendingAvatar });
+      await onUpdate();
+      setPendingAvatar(null);
+      showMsg('头像已应用');
+    } catch (err) {
+      showMsg((err as Error).message);
+    }
+  };
 
   const handleToggleSound = () => {
     const next = !isMuted;
@@ -124,6 +185,72 @@ export function SettingsApp({
         <div className="id-card">
           <div className="id-card-title">👤 玩家信息</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {/* 头像 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setShowAvatarMenu(v => !v)}
+                  disabled={uploadingAvatar || generatingAvatar}
+                  style={{ width: 56, height: 56, borderRadius: 12, cursor: 'pointer', background: 'var(--card-bg-hover)', border: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text)', overflow: 'hidden', padding: 0, fontFamily: 'inherit' }}
+                >
+                  {player.avatar ? (
+                    <img src={imageUrl(player.avatar)} alt="头像" style={{ width: '100%', height: '100%', objectFit: 'cover' }} referrerPolicy="no-referrer" />
+                  ) : (
+                    <span style={{ fontSize: '1.35rem', lineHeight: 1, fontWeight: 600 }}>{uploadingAvatar || generatingAvatar ? '⏳' : (player.name?.[0] || '＋')}</span>
+                  )}
+                </button>
+                {!player.avatar && !uploadingAvatar && !generatingAvatar && (
+                  <span style={{ position: 'absolute', right: -3, bottom: -3, width: 18, height: 18, borderRadius: '50%', background: 'var(--accent)', color: '#1c1c1c', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', lineHeight: 1, fontWeight: 700, boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }}>＋</span>
+                )}
+                {showAvatarMenu && (
+                  <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, zIndex: 20, background: 'var(--panel)', border: '1px solid var(--border-soft)', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.25)', padding: '4px 0', minWidth: 132 }}>
+                    <button onClick={() => { setShowAvatarMenu(false); fileInputRef.current?.click(); }} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                      🖼 上传图片
+                    </button>
+                    {canGenerate && (
+                      <button onClick={handleGenerateAvatar} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                        🎨 {generatingAvatar ? '生成中…' : '生成图片'}
+                      </button>
+                    )}
+                    {player.avatar && (
+                      <button onClick={() => { setShowAvatarMenu(false); setViewerSrc(player.avatar); }} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                        👁 查看图片
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: 1, fontSize: '0.75rem', color: 'var(--text-mute)', lineHeight: 1.5 }}>
+                上传或生成你的头像。没填外貌会按性别生成，留空用名字首字。
+              </div>
+            </div>
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleAvatarFile} style={{ display: 'none' }} />
+
+            {(generatingAvatar || pendingAvatar) && (
+              <div style={{ padding: '0.7rem', border: '1px solid var(--border-soft)', borderRadius: 10, background: 'var(--card-bg-alt)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)' }}>生成头像</span>
+                  {pendingAvatar && (
+                    <button onClick={() => setPendingAvatar(null)} style={{ width: 22, height: 22, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-mute)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }} aria-label="关闭">✕</button>
+                  )}
+                </div>
+                {generatingAvatar ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem', padding: '1.2rem 0' }}>
+                    <span style={{ fontSize: '1rem' }}>⏳</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>生成中…（约 10 秒）</span>
+                  </div>
+                ) : pendingAvatar ? (
+                  <>
+                    <img src={imageUrl(pendingAvatar)} alt="生成的头像" style={{ width: '100%', maxWidth: 220, margin: '0 auto', display: 'block', borderRadius: 10, border: '1px solid var(--border-soft)' }} referrerPolicy="no-referrer" />
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginTop: '0.6rem' }}>
+                      <button className="id-btn primary sm" onClick={applyPendingAvatar}>应用</button>
+                      <button className="id-btn sm" onClick={handleGenerateAvatar} disabled={generatingAvatar}>重新生成</button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            )}
+
             <div>
               <label style={{ fontSize: '0.75rem', color: 'var(--text-mute)' }}>名字</label>
               <input className="id-input" type="text" value={name} onChange={e => setName(e.target.value)} />
@@ -363,11 +490,13 @@ export function SettingsApp({
                 <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>自定义</div>
                 {homeBg.type === 'upload' && <span style={{ color: 'var(--accent)', fontSize: '0.9rem' }}>✓</span>}
               </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', margin: '0.15rem 0 0.4rem' }}>上传自己的图作主页背景</div>
-              <ImageUploadButton
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-mute)', margin: '0.15rem 0 0.4rem' }}>上传或生成自己的图作主页背景</div>
+              <BackgroundPicker
                 value={homeBg.type === 'upload' ? homeBg.value : undefined}
-                onUploaded={(imagePath) => { const bg: HomeBg = { type: 'upload', value: imagePath }; setHomeBg(bg); setHomeBgState(bg); }}
+                onSelect={(imagePath) => { const bg: HomeBg = { type: 'upload', value: imagePath }; setHomeBg(bg); setHomeBgState(bg); }}
                 onClear={() => { clearHomeBg(); setHomeBgState({ type: 'none', value: '' }); }}
+                label="上传 / 生成背景"
+                size={{ width: 768, height: 1344 }}
               />
             </div>
 
@@ -512,6 +641,9 @@ export function SettingsApp({
               <button className="id-btn sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => onNavigate({ type: 'archived' })}>
                 🗄️ 旧版功能
               </button>
+              <button className="id-btn sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => onNavigate({ type: 'experimental' })}>
+                🧪 实验功能
+              </button>
               {player.is_admin && (
                 <button className="id-btn sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => onNavigate({ type: 'admin' })}>
                   🛠 管理
@@ -579,6 +711,8 @@ export function SettingsApp({
           )}
         </div>
       </div>
+
+      {viewerSrc && <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} />}
     </div>
   );
 }

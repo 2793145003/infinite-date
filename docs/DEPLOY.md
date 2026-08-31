@@ -2,7 +2,7 @@
 
 > 目的：服务挂了照着这里重启。只记"怎么起、怎么杀、怎么验证"，不解释业务。
 >
-> 最后更新：2026-08-20（web-v4 挂载 8080/v4 当天）
+> 最后更新：2026-08-30（restart.sh 一键重启 + admin 重启 API）
 
 ---
 
@@ -17,6 +17,26 @@
 | dsh 认证反代 | 3090 | 127.0.0.1 | `deepseek-harness/proxy` | `node proxy.js` | Basic Auth + Cookie 会话 |
 
 > dsh 完整启动见 skill `dsh-subpath-mount`。简记：后端 `cd /output/deepseek-harness/repo && DSH_HOME=/output/deepseek-harness/home DSH_TELEMETRY_DISABLED=1 node apps/cli/lib/bin.js web`，反代 `cd /output/deepseek-harness/proxy && node proxy.js`。
+
+---
+
+## 一键重启（restart.sh，推荐）
+
+手动杀进程太容易漏（npm→sh→node 三层），现已内置 `restart.sh` 一键脚本，只重启**后端**（3000），不碰 8080/3001：
+
+```bash
+# 方式 A：手动执行
+bash /output/infinite-date-v2/restart.sh
+
+# 方式 B：API 触发（需管理员 token）
+curl -X POST http://127.0.0.1:3000/api/admin/restart -H "Authorization: Bearer <admin token>"
+```
+
+脚本流程：`sleep 2`（等 HTTP 响应先返回）→ 杀监听 3000 的 node（父链级联退出）→ 等端口释放（最多 10s）→ `source /tmp/idate_env.sh` → `setsid nohup npm run start` 启动新后端。
+
+- 日志：重启日志 `/tmp/idate_restart.log`，后端输出 `/tmp/idate_backend.log`。
+- 只重启后端，前端（8080/3001）不受影响，无需重启。
+- 仍要等 **40~60s** 后端才就绪（见下方陷阱 5），别急。
 
 ---
 
@@ -62,6 +82,8 @@ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/dsh/   # 401（认�
 3. **Hermes `terminal(background=true)` 的 `workdir` 参数不生效**：必须在命令里显式 `cd /path && ...`，否则 npm/pnpm 在错误目录找 `package.json`（报 ENOENT）。
 
 4. **杀进程杀到底层**：只杀 node 会留 `sh -c` 占端口（历史"3000 占满"就是这原因）。
+
+5. **启动慢，别误判卡死**：672MB 大库 + 十几 MB 的 WAL，重启后 tsx 从启动到端口监听要 **40~60 秒**。期间 `ss -tlnp` 看不到 3000/3001、preflight 进程状态在 D（不可中断 I/O，恢复 WAL）和 S（ep_poll 就绪）之间波动、日志停在「SQLite experimental warning」后无输出——这些都是正常现象，不是卡死。耐心等到 `curl -s http://127.0.0.1:3000/api/health` 返回 `{"status":"ok"}` 再验收。web-v4（3001）不用 sqlite，但首次 vite 扫描依赖同样慢，一并等。
 
 ---
 

@@ -742,7 +742,7 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
                             </span>
                           </div>
                         )}
-                        {renderText(l.content, l.kind === 'player' ? 'text-white/55' : 'text-ink-muted/70')}
+                        {renderText(l.content, l.kind === 'player' ? 'text-solid-contrast/65' : 'text-ink-muted/70')}
                       </div>
                     </div>
                   </div>

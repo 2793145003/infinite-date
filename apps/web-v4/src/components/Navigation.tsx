@@ -48,7 +48,7 @@ export const Navigation: React.FC<NavigationProps> = ({
               <div className="relative">
                 <Icon className="w-4 h-4" />
                 {Boolean(item.badge && item.badge > 0) && (
-                  <span className="absolute -top-1 -right-2 bg-solid text-solid-contrast text-[9px] w-3.5 h-3.5 rounded-full flex items-center justify-center font-bold">
+                  <span className="absolute -top-1 -right-2 bg-status-red text-white text-[9px] min-w-3.5 h-3.5 px-1 rounded-full flex items-center justify-center font-bold leading-none">
                     {item.badge}
                   </span>
                 )}

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS players (
   persona_notes TEXT NOT NULL DEFAULT '',
   gender        TEXT NOT NULL DEFAULT 'female',
   appearance    TEXT NOT NULL DEFAULT '',
+  home_bg       TEXT NOT NULL DEFAULT '',
   tutorial_step INTEGER NOT NULL DEFAULT 0,
   rating_score  REAL NOT NULL DEFAULT 0,
   is_admin      INTEGER NOT NULL DEFAULT 0,
@@ -540,6 +541,71 @@ CREATE TABLE IF NOT EXISTS scenario_sessions (
 CREATE INDEX IF NOT EXISTS idx_scenario_sessions_player ON scenario_sessions(player_id, ended);
 CREATE INDEX IF NOT EXISTS idx_scenario_sessions_scenario ON scenario_sessions(scenario_id);
 
+-- ═══ 互动小说（共写引擎，独立于约会系统）═══════════════════════════
+
+-- 小说表：玩家创建（对齐剧本 scenarios 的创建/归属模型）
+-- 角色不进 characters/character_instances/friendships/relationships，永远隔离在小说内
+CREATE TABLE IF NOT EXISTS novels (
+  id            TEXT PRIMARY KEY,
+  author_id     TEXT REFERENCES players(id) ON DELETE SET NULL,  -- 创建者，玩家删号置 NULL，小说保留
+  title         TEXT NOT NULL,                    -- 标题
+  summary       TEXT NOT NULL DEFAULT '',          -- 一句话简介（列表页展示）
+  world_setting TEXT NOT NULL DEFAULT '',          -- 世界观/背景设定（LLM 会读）
+  protagonist_setting TEXT NOT NULL DEFAULT '',    -- 玩家身份/处境（LLM 会读）
+  opening       TEXT NOT NULL DEFAULT '',          -- 开场文本（玩家进入即读到）
+  cover_url     TEXT,                              -- 封面图（可选）
+  status        TEXT NOT NULL DEFAULT 'draft',     -- draft/published
+  play_count    INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_novels_author ON novels(author_id);
+CREATE INDEX IF NOT EXISTS idx_novels_status ON novels(status, created_at);
+
+-- 小说角色：简单人设（不是完整角色卡，控制长度防止上下文溢出）
+CREATE TABLE IF NOT EXISTS novel_characters (
+  id          TEXT PRIMARY KEY,
+  novel_id    TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  gender      TEXT NOT NULL DEFAULT '',            -- 性别：'female'/'male'/''（空=未指定，LLM 按人设自由发挥）
+  persona     TEXT NOT NULL DEFAULT '',            -- 简单人设：性格/说话风格/与主角的关系/底线/秘密
+  emotional_anchor TEXT NOT NULL DEFAULT '',       -- 情绪表达锚点：负面情绪下的具体身体语言（独立于人设，OOC 修复）
+  appearance  TEXT NOT NULL DEFAULT '',            -- 外貌描述（供配图/立绘 + LLM 描写外貌）
+  avatar      TEXT NOT NULL DEFAULT '',            -- 头像（image_blobs 文件名，空=无）
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_novel_chars ON novel_characters(novel_id);
+
+-- 小说会话：玩家在某部小说的一条故事线（多周目：一局一条，同小说最多一条 active）
+CREATE TABLE IF NOT EXISTS novel_sessions (
+  id             TEXT PRIMARY KEY,
+  player_id      TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  novel_id       TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+  status         TEXT NOT NULL DEFAULT 'active',   -- active 进行中 / ended 玩家已写结尾
+  excluded_chars TEXT NOT NULL DEFAULT '[]',       -- JSON 数组：被点暗（不参与剧情）的角色 id，默认空=全部参与
+  story_overview TEXT NOT NULL DEFAULT '',         -- 故事进展总览（三折叠长期层；增量更新：旧总览 + 滑出中期的段摘要 → 新总览）
+  overview_upto  INTEGER NOT NULL DEFAULT 0,       -- 总览已折进到第几段（display=1 序号），防重复折叠
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_novel_sessions ON novel_sessions(player_id, novel_id);
+
+-- 小说段落：接力写的正文
+-- 玩家段 role='player' display=1（正文显示），AI 续写 role='assistant' display=1
+-- 正文 = 按时间序拼接所有 display=1 的段落
+-- 润色是独立功能：polish 接口只返回润色结果、不落库；玩家采纳后随续写一起落库
+CREATE TABLE IF NOT EXISTS novel_turns (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES novel_sessions(id) ON DELETE CASCADE,
+  role        TEXT NOT NULL,                       -- 'player' 玩家原文 / 'assistant' AI 续写
+  text        TEXT NOT NULL,
+  summary     TEXT NOT NULL DEFAULT '',            -- 该段事件摘要（三折叠中期层；空=尚未折叠）。折叠时只专门保留「未揭示的悬念/线索」，其余自然概括
+  time        TEXT NOT NULL DEFAULT '',            -- 该段发生的时间（「第N天·时段」，如「第1天·午后」）。续写时单拎注入当前时间，防止凭空跳时段
+  display     INTEGER NOT NULL DEFAULT 1,          -- 是否在正文中显示（润色开的玩家草稿=0）
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_novel_turns ON novel_turns(session_id, created_at);
+
 -- ═══ LLM 调用日志（1 小时滑动窗口，用于排查生成结果问题：气泡/分段/内容异常）═══
 CREATE TABLE IF NOT EXISTS llm_call_log (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -565,4 +631,16 @@ CREATE TABLE IF NOT EXISTS image_blobs (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_image_blobs_created ON image_blobs(created_at);
+
+-- ═══ 首页每日寄语 ═════════════════════════════════════════
+-- 按 (player × character × 北京时区 date_key) 幂等：每天每角色一句，当天落库复用，换角色换诗
+CREATE TABLE IF NOT EXISTS home_poems (
+  id            TEXT PRIMARY KEY,
+  player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL,
+  date_key      TEXT NOT NULL,                 -- 北京时区 YYYY-MM-DD
+  poem          TEXT NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_home_poems_unique ON home_poems(player_id, character_id, date_key);
 `;

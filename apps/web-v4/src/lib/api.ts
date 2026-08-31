@@ -249,6 +249,8 @@ export interface PlayerInfo {
   pronouns: string;
   gender: string;
   appearance: string;
+  avatar?: string;
+  home_bg?: string;
   tutorial_step: number;
   rating_score?: number;
   is_admin?: boolean;
@@ -413,6 +415,20 @@ export interface ScenarioInfo {
   updatedAt: number;
 }
 
+// ─── 生图可用性缓存 ─────────────────────────────────────
+let _imageGenEnabled: boolean | null = null;
+
+async function getImageGenEnabled(): Promise<boolean> {
+  if (_imageGenEnabled !== null) return _imageGenEnabled;
+  try {
+    const r = await request<{ imageGenEnabled?: boolean }>('/health');
+    _imageGenEnabled = r.imageGenEnabled ?? false;
+  } catch {
+    _imageGenEnabled = false;
+  }
+  return _imageGenEnabled;
+}
+
 // ─── API 方法 ────────────────────────────────────────────
 
 export const api = {
@@ -424,7 +440,7 @@ export const api = {
     }),
   me: () => request<{ player: PlayerInfo; permissions: number }>('/auth/me'),
   getPlayer: () => request<{ player: PlayerInfo; permissions: number }>('/player'),
-  updatePlayer: (data: { name?: string; pronouns?: string; gender?: string; appearance?: string }) =>
+  updatePlayer: (data: { name?: string; pronouns?: string; gender?: string; appearance?: string; avatar?: string; home_bg?: string }) =>
     request('/player', { method: 'PATCH', body: JSON.stringify(data) }),
 
   // 设置（LLM 配置）
@@ -480,6 +496,17 @@ export const api = {
       return data as { imagePath: string; size: number };
     });
   },
+
+  // AI 生成图片（调 /ai-image/generate，prompt 传中文描述，返回 imagePath）
+  // 头像：不传 opts（默认头像模式）；场景配图：传 { scene: true, appearance? }
+  generateImage: (prompt: string, opts: { scene?: boolean; appearance?: string; gender?: string; width?: number; height?: number } = {}) =>
+    request<{ imagePath: string }>('/ai-image/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, width: opts.width ?? 1024, height: opts.height ?? 1024, scene: opts.scene, appearance: opts.appearance, gender: opts.gender }),
+    }),
+
+  // 生图服务是否可用（health 接口返回，模块级缓存）
+  getImageGenEnabled: () => getImageGenEnabled(),
 
   // 事实记忆（日记页 → 角色记忆）
   listFacts: () => request<{ facts: FactItem[] }>('/facts'),
@@ -564,9 +591,16 @@ export const api = {
   getNpcSchedule: (characterId: string) =>
     request<{ current: { locationId: string; locationName: string; activity: string } | null }>(`/npcs/${characterId}/schedule`),
 
+  // 首页每日寄语（每天每角色一句；生成失败返回 poem=null，前端兜底默认句）
+  getHomePoem: (characterId: string) =>
+    request<{ poem: string | null; generatedAt: number | null }>(`/home-poem?characterId=${encodeURIComponent(characterId)}`),
+
   // 短信联系人线程（按最后消息时间降序，用于判断「最后一个联系的人」）
   getSmsThreads: () =>
     request<{ threads: { character_id: string; character_name: string; last_message_at: number | null }[] }>('/sms/threads'),
+
+  // 短信未读总数（首页/导航角标）
+  unreadSms: () => request<{ count: number }>('/sms/unread-count'),
 
   // ─── 剧本系统（场景剧本 scene-scenario）────────────────
   createScenario: (data: { title: string; description: string }) =>
@@ -739,6 +773,86 @@ export const api = {
       characters?: string[];
     }>('/scene-scenario/active'),
 
+  // ─── 互动小说（共写引擎）────────────────────────────
+  importNovel: (text: string) =>
+    request<{ novelId: string }>('/novel/import', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+  createNovel: (data: { title: string; summary?: string }) =>
+    request<{ novelId: string }>('/novel', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getNovels: (params: { mine?: boolean }) =>
+    request<{ novels: NovelInfo[] }>(`/novel${params.mine ? '?mine=1' : ''}`),
+  getNovel: (novelId: string) =>
+    request<{ novel: NovelInfo; characters: NovelCharacter[] }>(`/novel/detail/${novelId}`),
+  updateNovel: (novelId: string, data: Record<string, unknown>) =>
+    request<{ novel: NovelInfo }>(`/novel/detail/${novelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteNovel: (novelId: string) =>
+    request<{ ok: boolean }>(`/novel/detail/${novelId}`, { method: 'DELETE' }),
+  rollNovelField: (novelId: string, field: string) =>
+    request<{ field: string; value: string }>(`/novel/detail/${novelId}/roll`, {
+      method: 'POST',
+      body: JSON.stringify({ field }),
+    }),
+  rollNovelCharacters: (novelId: string, count?: number, direction?: string) =>
+    request<{ characters: NovelCharacter[] }>(`/novel/detail/${novelId}/roll-characters`, {
+      method: 'POST',
+      body: JSON.stringify({ count, direction }),
+    }),
+  rollNovelOpening: (novelId: string) =>
+    request<{ opening: string }>(`/novel/detail/${novelId}/roll-opening`, { method: 'POST' }),
+  addNovelCharacter: (novelId: string, data: { name: string; gender?: string; persona?: string; emotional_anchor?: string; appearance?: string; avatar?: string }) =>
+    request<{ character: NovelCharacter }>(`/novel/detail/${novelId}/character`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateNovelCharacter: (novelId: string, charId: string, data: { name?: string; gender?: string; persona?: string; emotional_anchor?: string; appearance?: string; avatar?: string }) =>
+    request<{ character: NovelCharacter }>(`/novel/detail/${novelId}/character/${charId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteNovelCharacter: (novelId: string, charId: string) =>
+    request<{ ok: boolean }>(`/novel/detail/${novelId}/character/${charId}`, { method: 'DELETE' }),
+  novelEnter: (novelId: string) =>
+    request<{ sessionId: string; reused?: boolean }>(`/novel/${novelId}/enter`, { method: 'POST' }),
+  getActiveNovel: () =>
+    request<{ active: boolean; sessionId?: string; novelId?: string; title?: string }>('/novel/active'),
+  getNovelSession: (sessionId: string) =>
+    request<NovelSessionData>(`/novel/session/${sessionId}`),
+  updateNovelExcluded: (sessionId: string, excludedCharIds: string[]) =>
+    request<{ excludedCharIds: string[] }>(`/novel/session/${sessionId}/excluded`, {
+      method: 'PATCH',
+      body: JSON.stringify({ excludedCharIds }),
+    }),
+  polishNovel: (sessionId: string, text: string) =>
+    request<{ polished: string }>(`/novel/session/${sessionId}/polish`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+  continueNovel: (sessionId: string, text: string, onDelta?: (delta: string) => void) =>
+    requestStream<{ text: string }>(
+      `/novel/session/${sessionId}/continue`,
+      { method: 'POST', body: JSON.stringify({ text }) },
+      (evt) => {
+        if (evt.type === 'delta' && evt.content) onDelta?.(evt.content);
+      },
+    ),
+  endNovel: (sessionId: string, text?: string) =>
+    request<{ ok: boolean; ended: boolean }>(`/novel/session/${sessionId}/end`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+  retractNovel: (sessionId: string) =>
+    request<{ removed: boolean; remaining: number }>(`/novel/session/${sessionId}/retract`, {
+      method: 'POST',
+    }),
+
   // ─── 回忆归档（日记页）──────────────────────────────
   getArchiveDates: (q?: string) =>
     request<{ dates: ArchiveDateItem[] }>(`/archive/dates${q ? `?q=${encodeURIComponent(q)}` : ''}`),
@@ -873,11 +987,25 @@ export const api = {
       method: 'POST',
     }),
 
+  // 场景地点 — 玩家创建子地点（写 scene_locations；显式 isPublic 否则继承父级）
+  sceneCreateLocation: (data: { name: string; summary?: string; parentId?: string | null; isPublic?: boolean }) =>
+    request<{ location: { id: string; name: string } }>(`/scene/locations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   // 场景地点 — 常驻路人（玩家接口，LocationPanel 复用）
   sceneAddNpc: (locationId: string, data: { role: string; name: string; persona?: string }) =>
     request<{ npcs: SceneNpc[] }>(`/scene/locations/${locationId}/npcs`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+
+  // 场景地点 — 玩家上传/生成地点背景（私有地点直写，公共地点进提交池）
+  setLocationBackground: (locationId: string, background: string) =>
+    request<{ ok: boolean; mode: string; background: string }>(`/scene/locations/${locationId}/background`, {
+      method: 'POST',
+      body: JSON.stringify({ background }),
     }),
 };
 
@@ -1062,4 +1190,54 @@ export interface ArchiveSceneScenarioDetail {
   roundNo: number;
   createdAt: number;
   updatedAt: number;
+}
+
+// ─── 互动小说类型 ────────────────────────────────────
+
+export interface NovelInfo {
+  id: string;
+  authorId: string | null;
+  title: string;
+  summary: string;
+  worldSetting: string;
+  protagonistSetting: string;
+  opening: string;
+  coverUrl: string | null;
+  status: string;
+  playCount: number;
+  createdAt: number;
+  updatedAt: number;
+  characterNames?: string[];
+  characterAvatars?: string[];
+}
+
+export interface NovelCharacter {
+  id: string;
+  novelId: string;
+  name: string;
+  gender: string;
+  persona: string;
+  emotionalAnchor: string;
+  appearance: string;
+  avatar: string;
+}
+
+export interface NovelTurn {
+  id: string;
+  role: string;
+  text: string;
+  display: boolean;
+  createdAt: number;
+}
+
+export interface NovelSessionData {
+  sessionId: string;
+  novelId: string;
+  status: string;
+  isAuthor: boolean;
+  excludedCharIds: string[];
+  novel: NovelInfo;
+  protagonist: { name: string; pronoun: string };
+  characters: NovelCharacter[];
+  turns: NovelTurn[];
 }

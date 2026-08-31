@@ -1,3 +1,9 @@
+【性别】
+{{gender}}
+
+【外貌】
+{{appearance}}
+
 【角色性格】
 {{personality}}
 

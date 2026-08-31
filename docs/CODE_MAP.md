@@ -91,6 +91,11 @@ infinite-date-v2/
 | `name-pool-data.ts` | 5 | 中文人名池数据（男女各数百个） | `MALE_NAMES`, `FEMALE_NAMES` |
 | `auth.ts` | 96 | 认证（邀请码 → player_id → session token）+ 管理员校验 | `requireAuth`, `requireAdmin`, `issueToken`, `validateInviteCode` |
 | `wiki-search.ts` | 137 | IP角色搜索（MediaWiki API，免key免Docker） | `searchCharacter` |
+| `ai-image.ts` | 229 | **AI 生图**。gemma 扩写英文 prompt → 调独立容器 Krea 2 → 存 image_blobs。头像模式（scene=false）按 gender 锚定称呼；场景模式（scene=true）gemma 当摄影师判 has_person/has_face，配图放开出人 | `generateImage` |
+| `home-poem.ts` | 103 | **首页每日寄语**。按角色每日一句（场景锚 + 关系现状），按天缓存 | `generateHomePoem`, `homePoemDateKey` |
+| `npc-task.ts` | 184 | **NPC 任务邀请触发**。checkNpcTaskInvite / sweepSoloMissions 挂 moment-scheduler 5min tick；好友+空档段+主城+当日未发过才触发 | `checkNpcTaskInvite`, `sweepSoloMissions` |
+| `npc-mission.ts` | 226 | **NPC 任务构建**。基于角色特长生成温馨向任务（LLM） | `buildNpcMission` |
+| `cozy-worldgen.ts` | 91 | **温馨向世界生成**。卦象温馨层（八卦池/目标池/温馨向卦象渲染），NPC 任务/世界任务温馨向共用 | `cozyHexLayer`, `renderBaguaXiangLayer`, `cozyGoalGuide` |
 | `util.ts` | 20 | 通用工具 | `genId`, `now`, `jsonParse` |
 
 ---
@@ -188,6 +193,31 @@ infinite-date-v2/
 | | GET | `/scene-scenario/:sessionId` | 读会话详情 |
 | | GET | `/scene-scenario/active` | 进行中的场景剧本 |
 
+### 互动小说系统（novel 共写引擎）
+
+| 文件 | Method | Path | 功能 |
+|---|---|---|---|
+| **novel.ts** | POST | `/novel/import` | 导入现有约会角色为小说角色（转简单人设） |
+| | POST | `/novel` | 创建小说（作者=创建者，draft/published） |
+| | GET | `/novel` | 小说列表（我的/公开） |
+| | GET | `/novel/detail/:novelId` | 小说详情 |
+| | PATCH | `/novel/detail/:novelId` | 编辑小说 |
+| | DELETE | `/novel/detail/:novelId` | 删除小说 |
+| | POST | `/novel/detail/:novelId/roll` | roll 世界观/玩家身份 |
+| | POST | `/novel/detail/:novelId/roll-characters` | roll 角色数组 |
+| | POST | `/novel/detail/:novelId/roll-opening` | roll 开场 |
+| | POST | `/novel/detail/:novelId/character` | 加角色 |
+| | PATCH | `/novel/detail/:novelId/character/:charId` | 编辑角色（含情绪锚点 emotional_anchor） |
+| | DELETE | `/novel/detail/:novelId/character/:charId` | 删角色 |
+| | POST | `/novel/:novelId/enter` | 开始/进入故事线（多周目） |
+| | GET | `/novel/active` | 进行中的故事线 |
+| | GET | `/novel/session/:sessionId` | 读故事线（正文流） |
+| | PATCH | `/novel/session/:sessionId/excluded` | 更新出场名单（点暗=有事不在） |
+| | POST | `/novel/session/:sessionId/polish` | 润色（独立功能，忠实原文） |
+| | POST | `/novel/session/:sessionId/continue` | 续写（SSE 流式） |
+| | POST | `/novel/session/:sessionId/retract` | 撤回末段 |
+| | POST | `/novel/session/:sessionId/end` | 写结尾（ended，可另开新局） |
+
 ### 其他
 
 | 文件 | Method | Path | 功能 |
@@ -224,12 +254,15 @@ infinite-date-v2/
 | | PATCH | `/facts/:id` | 编辑事实 |
 | **upload.ts** | POST | `/upload/image` | 上传图片（→image_blobs表） |
 | **image.ts** | GET | `/uploads/:filename` | 读图片（从image_blobs表） |
+| **ai-image.ts** | POST | `/ai-image/generate` | AI 生图（Krea 2，gemma 扩写，头像/配图/背景图共用） |
+| **home-poem.ts** | GET | `/home-poem` | 首页每日寄语（按角色每日一句） |
 | **admin.ts** | GET | `/admin/characters` | 管理角色 |
 | | POST | `/admin/invite-codes` | 生成邀请码 |
 | | GET | `/admin/scene-locations` | 管理场景地点 |
 | | POST | `/admin/scene-map/locations` | 创建场景地点 |
 | | PUT | `/admin/scene-map/locations/:id/parent` | 设置父地点 |
 | | PUT | `/admin/scene-map/locations/:id/home` | 设置谁的家 |
+| | POST | `/admin/restart` | 重启后端（鉴权后 detached spawn restart.sh） |
 | **archive.ts** | GET | `/archive/dates` | 旧约会归档 |
 | | GET | `/archive/scene-dates` | 场景约会归档（scene_type='date'） |
 | | GET | `/archive/scene-scenarios` | 场景剧本归档（scene_type='scenario'） |
@@ -341,7 +374,7 @@ infinite-date-v2/
 | `utils/imageUpload.ts` | 50 | 图片上传 |
 | `constants/colors.ts` | 6 | 颜色常量 |
 
-### components（42 个）
+### components（48 个）
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
@@ -387,6 +420,12 @@ infinite-date-v2/
 | `AdminApp.tsx` | 38 | 管理后台入口 |
 | `FishMode.tsx` | 185 | 摸鱼（伪装 AI 助手） |
 | `AutoTextarea.tsx` | 25 | 自动高度文本框 |
+| `NovelList.tsx` | 147 | 互动小说列表（我的/公开页签） |
+| `NovelEditor.tsx` | 719 | 互动小说创建/编辑（设定+开场+角色名单+roll） |
+| `NovelPlay.tsx` | 462 | 互动小说写作/阅读页（接力写+润色开关+出场名单+撤回） |
+| `BackgroundPicker.tsx` | 243 | 主页壁纸选择（上传/生成，9:16 竖图） |
+| `ImageViewer.tsx` | 161 | 全屏图片查看器（点图放大+双指缩放） |
+| `PlayerChipInput.tsx` | 141 | 玩家占位符输入（{{player_name}} 按钮，显示【玩家】） |
 
 ### components/admin/
 
@@ -424,6 +463,14 @@ infinite-date-v2/
 | `mission.worldgen-grounded.txt` | 71 | 世界生成 grounded 版（AB 实验备选） | scripts/ab-worldgen-grounded.ts |
 | `deity.system.txt` | 48 | 主神系统 | builder.ts |
 | `deity.creation.system.txt` | 107 | 主神创建角色 | creation.ts |
+| `novel.continue.txt` | 32 | **互动小说续写**（AI 写世界、玩家写主角，停点=角色反应告一段落） | routes/novel.ts |
+| `novel.polish.txt` | 16 | 互动小说润色（忠实原文，只改措辞不扩写） | routes/novel.ts |
+| `novel.roll.txt` | 20 | 小说通用字段 roll（世界观/玩家身份） | routes/novel.ts |
+| `novel.roll-characters.txt` | 15 | 小说角色数组 roll（表里反差/有秘密底线/性格不重复） | routes/novel.ts |
+| `novel.roll-opening.txt` | 20 | 小说开场 roll（含禁选项规则） | routes/novel.ts |
+| `novel.summary.txt` | 13 | 段摘要（保留悬念/线索 + 时间地点） | routes/novel.ts |
+| `novel.overview.txt` | 16 | 故事总览增量更新 | routes/novel.ts |
+| `novel.import.txt` | 22 | 导入约会角色为小说角色（转简单人设） | routes/novel.ts |
 
 > **改任何 .txt 后需重启后端**（loadPrompt 有 Map 缓存）。
 
@@ -547,6 +594,7 @@ moment-scheduler.ts (5min tick)
 | | `llm_call_log` | LLM调用日志（24h自动清理） |
 | | `permissions` / `invite_codes` | 权限/邀请 |
 | | `player_llm_configs` | per-player LLM 配置（base_url/api_key/model，未填回落 env） |
+| **互动小说** | `novels` / `novel_characters` / `novel_sessions` / `novel_turns` | 共写引擎（小说/简单人设角色/故事线多周目/段落）。完全隔离于约会体系，不进 characters/行程/朋友圈 |
 
 ---
 
@@ -572,17 +620,30 @@ moment-scheduler.ts (5min tick)
 | 文档 | 内容 |
 |---|---|
 | **CODE_MAP.md**（本文件） | 代码地图：文件→功能索引 |
-| **V4_STYLE.md** | v4 统一视觉风格：语义色/solid 实底按钮/全屏布局约定 |
-| **MEMORY_NOTES.md** | 变更记录：每次修复/功能的设计决策+踩坑 |
+| **DESIGN.md**（根目录） | 主设计文档（完整设计决策） |
+| **DEPLOY.md** | 服务部署与重启手册（服务清单/杀进程/重启/验证/restart.sh） |
 | **DATA_MODEL.md** | 数据模型：全部表结构+字段说明 |
 | **PROMPTS.md** | Prompt 模板说明 |
+| **NOVEL_DESIGN.md** | 互动小说共写引擎设计（接力写/润色/出场名单/三折叠上下文） |
+| **IDEOGRAM4.md** | Krea 2 生图集成（文件名历史遗留，内容是 Krea 2） |
+| **home-poem-daily.md** | 首页每日寄语设计 |
+| **location-background-generation.md** | 地点背景图生成设计 |
+| **character-hub-friends-v3.md** | 角色中心好友 v3 |
+| **V4_STYLE.md** | v4 统一视觉风格：语义色/solid 实底按钮/全屏布局约定 |
+| **V4_API_MAPPING.md** | v4 API 映射 |
+| **MEMORY_NOTES.md** | 变更记录：每次修复/功能的设计决策+踩坑 |
 | **OPEN_QUESTIONS.md** | 未解决设计问题 |
+| **UNIMPLEMENTED_FEATURES.md** | 未实现功能清单 |
 | **MIGRATION_DESIGN.md** | v3→v2 迁移设计（新表逐步替代旧表） |
 | **MISSION_DESIGN.md** | 任务系统设计 |
+| **HEXAGRAM_MISSION_DESIGN.md** | 卦象任务设计 |
+| **NPC_TASK_DESIGN.md** / **NPC_TASK_IMPL.md** | NPC 任务设计 / 实现 |
 | **GROUP_CHAT_DESIGN.md** | 群聊设计 |
 | **MEDIA_BACKGROUND_DESIGN.md** | 媒体/背景图系统 |
+| **MAP_VIZ_DESIGN.md** | 地图可视化设计 |
 | **scene-director-rename-design.md** | 点名版引擎设计（已投产） |
 | **scene-scenario-design.md** | 场景剧本设计（scene 引擎版剧本，数值+气氛组+做梦） |
+| **OWNER_CHARACTER_MIGRATION.md** | 作者角色迁移 |
 | **该死-prompt-修复记录.md** | 心声"该死"修复全过程 |
 | **session-2026-08-07-*.md** | 气泡节奏/时间戳/改角色名/LLM日志 会话记录 |
 | **v3-archive/** | v3 设计文档归档（已删 v3 代码，仅留文档） |

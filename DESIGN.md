@@ -375,9 +375,9 @@ NPC有自我意识，知道自己是被召唤到主城的。关键在于——**
 - 通关 → 评级 → 权限到账
 - 玩家描述自然累积（LLM逐句判断是否更新 `player_description`）
 
-#### NPC任务：角色特长，温馨向【未实现】
+#### NPC任务：角色特长，温馨向【已实现】
 
-> ⚠️ **设计已定稿（2026-08-16）**：本节是早期设计草案。定稿版（NPC 主动摇卦生成温馨小任务 → 短信邀请 → 接受/拒绝两分支；触发 = 好友 + 行程空档 + 不打断话题 + 每 NPC 每天一次；拒绝后 NPC 独自完成、roll 完成时长、期间从主城消失/短信收不到）见 `docs/NPC_TASK_DESIGN.md`。
+> ✅ **已实现**：NPC 主动摇卦生成温馨小任务 → 短信邀请 → 接受/拒绝两分支（`lib/npc-task.ts` + `lib/npc-mission.ts`，挂 moment-scheduler 5min tick）。触发 = 好友 + 行程空档 + 不打断话题 + 每 NPC 每天一次；拒绝后 NPC 独自完成、roll 完成时长。定稿设计见 `docs/NPC_TASK_DESIGN.md`（实现记录见 `docs/NPC_TASK_IMPL.md`）。
 
 - 系统发给NPC，NPC根据关系主动邀请玩家（玩家可拒绝）
 - 任务和**角色本身的能力/性格/过去**相关——知更鸟教别的世界的福利院孩子唱歌、鲁迅去某个世界办识字班、战斗型NPC帮某个世界解决野兽骚扰
@@ -391,7 +391,8 @@ NPC有自我意识，知道自己是被召唤到主城的。关键在于——**
 #### 任务的共同原则
 
 - **任务触发方式（世界任务·已实现）**：玩家在主城主动**摇卦起卦**（`POST /missions/divine`）触发，非随机非固定日程。起卦种子=玩家+时辰+序号，同一时辰内可摇多次（序号递增）得到不同卦
-- **角色任务/NPC任务（未实现）**：随机触发机制到实现时再定
+- **角色任务（未实现）**：触发机制到实现时再定
+- **NPC任务（已实现）**：好友 + 行程空档段自动触发（moment-scheduler 5min tick），一次只留一个待处理邀请
 - 任务不是必须的——在主城直接约NPC也行
 - 玩家可以选择不去
 - 不强制指定同伴——角色任务NPC不参与，世界任务玩家自选，NPC任务NPC邀请玩家
@@ -790,6 +791,18 @@ BootScreen 输入名字
 - **不重新锁定**：教程走完后所有app永久解锁。如果玩家跳过某步（比如不读邮件直接点地图），地图已经解锁就能直接进
 - **教程状态追踪**：数据库存储 `tutorial_step` 字段记录教程进度（0=未开始, 1=邮件已发, 2=邮件已读, 3=主城已进, 4=完成）。详见 docs/DATA_MODEL.md
 
+### 3.10 互动小说共写
+
+和 AI 一起写小说。玩家以第三人称作者视角写一段，AI 忠实润色（可选）+ 续写下一段（旁白 + 引号对话交织）。没有结尾、没有章节、没有预设节点，只有「设定 + 开场」，写到哪算哪。
+
+- **主角由玩家写，AI 只写世界**：AI 续写里主角的动作/对话/心理都不出现，只写角色们的反应和对话 + 环境氛围
+- **润色独立功能**：玩家写完一段可选「润色」，忠实原文只改措辞，可单独查看编辑后再定
+- **出场名单可控**：一排角色头像亮=参与、暗=不参与；点暗的角色故事里「有事不在」
+- **三折叠上下文**：热窗（最近原文）+ 段摘要 + 故事总览（增量更新）
+- **完全隔离**：小说角色是小说组成部分，不进约会 characters/行程/朋友圈体系
+
+完整设计见 `docs/NOVEL_DESIGN.md`。
+
 ---
 
 ## 四、技术架构
@@ -881,7 +894,7 @@ infinite-date/
 | 约会对话 | routes/conversation.ts | 约会session管理 + 单聊/群聊 + 搜索增强 |
 | 剧本系统 | routes/scenario.ts | 剧本创建/对话/数值判定/梦短信 |
 | 探索系统 | routes/explore.ts | 地点探索 + 场景生成 |
-| 任务系统 | routes/mission.ts | 卦象驱动世界任务（摇卦起卦→生成世界→困境→目标态通关→评级自动发奖）。角色任务/NPC任务未实现 |
+| 任务系统 | routes/mission.ts + lib/divination.ts + lib/world-theme.ts | 卦象驱动世界任务（摇卦起卦→生成世界→困境→目标态通关→评级自动发奖）。角色任务未实现，NPC任务已实现（见下） |
 | 朋友圈 | routes/moments.ts | NPC发帖/点赞/评论 + 未读badge |
 | LLM适配器 | llm/adapter.ts | vLLM/OpenAI兼容接口，guided_json + 超时 + MAX_MODEL_LEN环境变量 |
 | Prompt框架 | prompt/builder.ts | 角色数据→LLM prompt组装，generateReply三层防御 |
@@ -896,6 +909,10 @@ infinite-date/
 | 角色创建 | routes/creation.ts + systems/creator/ | 系统引导式AI对话生成角色卡 |
 | 管理后台 | routes/admin.ts | NPC审核/邀请码管理/权限调整 |
 | 摸鱼模式 | routes/fish.ts | 伪装AI助手界面 |
+| 互动小说共写 | routes/novel.ts | AI写世界玩家写主角（第三人称接力写）+ 润色独立 + 出场名单 + 三折叠上下文。见 docs/NOVEL_DESIGN.md |
+| AI 生图 | lib/ai-image.ts + 独立容器 Krea 2 | gemma 扩写英文 prompt → Krea 2 出图；头像按性别锚定，配图 gemma 当摄影师判 has_person/has_face |
+| 首页每日寄语 | lib/home-poem.ts + routes/home-poem.ts | 按角色每日一句（场景锚 + 关系现状） |
+| NPC 任务 | lib/npc-task.ts + lib/npc-mission.ts | NPC 主动邀请（好友+空档段触发），同行 coop / NPC 独自完成 solo，温馨向 |
 | 错误处理 | index.ts | 4xx返回具体message，5xx只返回通用提示 |
 
 ### 4.4 运行环境

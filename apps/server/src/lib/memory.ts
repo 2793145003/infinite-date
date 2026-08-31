@@ -262,6 +262,17 @@ async function _maybeFoldSmsIncrementalImpl(
   characterId: string,
   skipPlayerFacts: boolean,
 ): Promise<void> {
+  // 防御：校验 thread 归属，防止 playerId 串号。
+  // 历史 bug（2026-08 露露号 ↔ test-player-001 镜像期间）：折叠时 threadId/playerId 错配，
+  // 把 A 玩家 thread 的短信折叠记到了 B 玩家名下，导致跨玩家记忆污染。
+  // 折叠前强制核对 thread.player_id 与传入 playerId，不一致直接跳过并告警。
+  const threadRow = db.prepare('SELECT player_id FROM message_threads WHERE id = ?').get(threadId) as { player_id: string } | undefined;
+  if (!threadRow) return;
+  if (threadRow.player_id !== playerId) {
+    console.error(`[memory] 短信折叠 thread 归属不一致，已跳过：threadId=${threadId} thread.player_id=${threadRow.player_id} 传入 playerId=${playerId}`);
+    return;
+  }
+
   const msgCount = db.prepare('SELECT COUNT(*) as cnt FROM text_messages WHERE thread_id = ?').get(threadId) as { cnt: number };
   if (msgCount.cnt < SMS_FOLD_INTERVAL) return;
 
@@ -279,12 +290,12 @@ async function _maybeFoldSmsIncrementalImpl(
   if (unfolded.cnt < SMS_FOLD_INTERVAL) return;
 
   const messages = db.prepare(`
-    SELECT sender, body, internal, internal_notable, rowid as rid
+    SELECT sender, body, image_asset_id, metadata, internal, internal_notable, rowid as rid
     FROM text_messages WHERE thread_id = ? AND rowid > ?
     ORDER BY created_at ASC
     LIMIT ?
   `).all(threadId, foldedUpTo, SMS_FOLD_INTERVAL) as Array<{
-    sender: string; body: string; internal: string; internal_notable: number; rid: number;
+    sender: string; body: string; image_asset_id: string | null; metadata: string | null; internal: string; internal_notable: number; rid: number;
   }>;
 
   if (messages.length < 2) return;
@@ -294,12 +305,21 @@ async function _maybeFoldSmsIncrementalImpl(
 
   try {
     await foldMessages(
-      messages.map(m => ({
-        role: m.sender === 'player' ? 'player' : 'assistant',
-        text: m.body,
-        internal: m.internal,
-        internal_notable: m.internal_notable,
-      })),
+      messages.map(m => {
+        // 图片消息 body 为空，用 metadata.image_prompt 转成文字，否则图片内容在折叠时丢失
+        let text = m.body;
+        if (m.image_asset_id) {
+          const meta = jsonParse<{ image_prompt?: string }>(m.metadata ?? '{}', {});
+          const prompt = (meta.image_prompt ?? '').trim();
+          text = prompt ? `（照片：${prompt}）` : '（照片）';
+        }
+        return {
+          role: m.sender === 'player' ? 'player' : 'assistant',
+          text,
+          internal: m.internal,
+          internal_notable: m.internal_notable,
+        };
+      }),
       threadId, playerId, characterId, null,
       charName, foldedUpTo, msgEnd,
       'sms', skipPlayerFacts,
@@ -334,6 +354,14 @@ async function _foldChronicleImpl(
   characterInstanceId: string | null,
   skipPlayerFacts: boolean,
 ): Promise<void> {
+  // 防御：校验会话归属，防止 playerId 串号（与短信折叠同一类跨玩家污染 bug 的会话侧防御）
+  const sessRow = db.prepare('SELECT player_id FROM conversation_sessions WHERE id = ?').get(sessionId) as { player_id: string } | undefined;
+  if (!sessRow) return;
+  if (sessRow.player_id !== playerId) {
+    console.error(`[memory] 约会折叠会话归属不一致，已跳过：sessionId=${sessionId} session.player_id=${sessRow.player_id} 传入 playerId=${playerId}`);
+    return;
+  }
+
   const charName = getCharName(characterId);
 
   // 循环折叠所有剩余未总结的消息，每批 FOLD_INTERVAL 条

@@ -251,6 +251,9 @@ export type ActiveTab =
   | 'scenery-view'
   | 'location-select'
   | 'scenario-editor'
+  | 'novels'
+  | 'novel-editor'
+  | 'novel-play'
   | 'admin';
 
 /** 当前角色的「当前行程」——地图约会/短信约会/任务/剧本四态，空闲时 idle */

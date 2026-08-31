@@ -20,6 +20,7 @@ import {
 import { Character, MomentPost, MomentComment } from '../types';
 import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { api, type ApiMoment } from '../lib/api';
+import { ImageViewer } from './ImageViewer';
 
 interface MomentsScreenProps {
   activeCharacter: Character;
@@ -183,6 +184,7 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
   // 朋友圈动态：从后端 /moments 加载
   const [posts, setPosts] = useState<MomentPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
 
   const loadMoments = async () => {
     try {
@@ -473,7 +475,8 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
                           <img
                             src={img}
                             alt="Post attachment"
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-cover cursor-zoom-in"
+                            onClick={() => setViewerSrc(img)}
                           />
                         </div>
                       ))}
@@ -818,6 +821,8 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
           </div>
         </div>
       )}
+
+      {viewerSrc && <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} />}
     </div>
   );
 };

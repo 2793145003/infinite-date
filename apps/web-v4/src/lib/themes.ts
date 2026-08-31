@@ -10,7 +10,7 @@
  *   → 只对当前玩家生效（localStorage），不改 index.css、不新增公共主题。
  */
 
-import { imageUrl } from './api';
+import { imageUrl, api } from './api';
 import butterflyWallpaperImg from '../assets/images/butterfly_ripple_wallpaper_1786953401075.jpg';
 
 export type ThemeId = 'dark-night' | 'warm-dusk' | 'deep-forest' | 'light-paper' | 'pure-white' | 'watercolor' | 'custom';
@@ -524,11 +524,38 @@ export function getHomeBg(): HomeBg {
 export function setHomeBg(bg: HomeBg): void {
   localStorage.setItem(HOME_BG_KEY, JSON.stringify(bg));
   applyHomeBg(bg);
+  persistHomeBgToServer(bg);
 }
 
 export function clearHomeBg(): void {
   localStorage.removeItem(HOME_BG_KEY);
   applyHomeBg({ type: 'none', value: '' });
+  persistHomeBgToServer({ type: 'none', value: '' });
+}
+
+/** 把 HomeBg 持久化到后端 players.home_bg（localStorage 被误删时后端可恢复） */
+function persistHomeBgToServer(bg: HomeBg): void {
+  try {
+    api.updatePlayer({ home_bg: JSON.stringify(bg) }).catch(() => {});
+  } catch {
+    // 未登录 / 网络异常时静默忽略（localStorage 仍是即时生效的缓存）
+  }
+}
+
+/** 启动时用后端 home_bg 兜底恢复（本地优先：仅当本地为空时才恢复后端值） */
+export function syncHomeBgFromServer(serverHomeBg: string | null | undefined): void {
+  if (!serverHomeBg) return;
+  if (getHomeBg().type !== 'none') return; // 本地已有壁纸，不覆盖
+  try {
+    const p = JSON.parse(serverHomeBg) as Partial<HomeBg>;
+    if (p.type === 'preset' && typeof p.value === 'string' && HOME_BG_PRESETS.some(x => x.id === p.value)) {
+      setHomeBg({ type: 'preset', value: p.value });
+    } else if (p.type === 'upload' && typeof p.value === 'string' && p.value) {
+      setHomeBg({ type: 'upload', value: p.value });
+    }
+  } catch {
+    // 忽略损坏的 JSON
+  }
 }
 
 /** 把背景转成 CSS background-image 字符串，写到 --home-bg-image 变量（无背景则移除） */

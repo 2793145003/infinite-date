@@ -1035,6 +1035,86 @@ CREATE INDEX idx_image_blobs_created ON image_blobs(created_at);
 
 ---
 
+## 五·六、互动小说共写引擎（novel，2026-08-27）
+
+> 完全隔离于约会体系：小说角色不进 `characters`/`character_instances`/`friendships`/`relationships`，不参与行程/主动消息/朋友圈。主角=玩家本人（名字读 `players.name`，第三人称代词跟 `players.gender`），不单独存字段。
+
+### novels — 小说（对齐剧本 scenarios 的创建/归属模型）
+
+```sql
+CREATE TABLE novels (
+  id                  TEXT PRIMARY KEY,
+  author_id           TEXT REFERENCES players(id) ON DELETE SET NULL,  -- 创建者，玩家删号置 NULL，小说保留
+  title               TEXT NOT NULL,
+  summary             TEXT NOT NULL DEFAULT '',          -- 一句话简介（列表页）
+  world_setting       TEXT NOT NULL DEFAULT '',          -- 世界观/背景设定
+  protagonist_setting TEXT NOT NULL DEFAULT '',          -- 玩家身份/处境
+  opening             TEXT NOT NULL DEFAULT '',          -- 开场文本
+  cover_url           TEXT,                              -- 封面图（可选）
+  status              TEXT NOT NULL DEFAULT 'draft',     -- draft/published
+  play_count          INTEGER NOT NULL DEFAULT 0,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX idx_novels_author ON novels(author_id);
+CREATE INDEX idx_novels_status ON novels(status, created_at);
+```
+
+### novel_characters — 小说角色（简单人设，不是完整角色卡）
+
+```sql
+CREATE TABLE novel_characters (
+  id              TEXT PRIMARY KEY,
+  novel_id        TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  gender          TEXT NOT NULL DEFAULT '',            -- 'female'/'male'/''（空=LLM自由发挥）
+  persona         TEXT NOT NULL DEFAULT '',            -- 简单人设：性格/说话风格/关系/底线/秘密
+  emotional_anchor TEXT NOT NULL DEFAULT '',           -- 情绪表达锚点：负面情绪下的身体语言（独立于人设，OOC 修复）
+  appearance      TEXT NOT NULL DEFAULT '',            -- 外貌描述（供配图 + LLM 描写外貌）
+  avatar          TEXT NOT NULL DEFAULT '',            -- 头像（image_blobs 文件名）
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX idx_novel_chars ON novel_characters(novel_id);
+```
+
+### novel_sessions — 故事线（多周目：一局一条，同小说最多一条 active）
+
+```sql
+CREATE TABLE novel_sessions (
+  id             TEXT PRIMARY KEY,
+  player_id      TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  novel_id       TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+  status         TEXT NOT NULL DEFAULT 'active',   -- active/ended
+  excluded_chars TEXT NOT NULL DEFAULT '[]',       -- JSON 数组：被点暗（不参与剧情）的角色 id
+  story_overview TEXT NOT NULL DEFAULT '',         -- 故事总览（三折叠长期层，增量更新）
+  overview_upto  INTEGER NOT NULL DEFAULT 0,       -- 总览已折进到第几段，防重复折叠
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+CREATE INDEX idx_novel_sessions ON novel_sessions(player_id, novel_id);
+```
+
+### novel_turns — 段落（接力写正文）
+
+```sql
+CREATE TABLE novel_turns (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES novel_sessions(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL,                       -- 'player' 玩家原文 / 'assistant' AI 续写
+  text       TEXT NOT NULL,
+  summary    TEXT NOT NULL DEFAULT '',            -- 段摘要（三折叠中期层；空=未折叠，只保留悬念/线索）
+  time       TEXT NOT NULL DEFAULT '',            -- 该段发生时间（「第N天·时段」，防时段漂移）
+  display    INTEGER NOT NULL DEFAULT 1,          -- 是否显示（润色开的玩家草稿=0）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_novel_turns ON novel_turns(session_id, created_at);
+```
+
+- 正文 = 按时间序拼接所有 `display=1` 的段落。
+- 润色是独立功能：polish 接口只返回润色结果、不落库；玩家采纳后随续写一起落库。
+
+---
+
 ## 六、已知问题与设计决策
 
 ### 多态FK

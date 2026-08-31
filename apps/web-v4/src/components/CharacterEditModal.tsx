@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, imageUrl } from '../lib/api';
+import { ImageViewer } from './ImageViewer';
 
 type Draft = Record<string, any>;
 
@@ -57,6 +58,15 @@ export function CharacterEditModal({
   const [msg, setMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [generatingAvatar, setGeneratingAvatar] = useState(false);
+  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
+  const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
+  const [canGenerate, setCanGenerate] = useState(false);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getImageGenEnabled().then(setCanGenerate);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +129,7 @@ export function CharacterEditModal({
   const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setShowAvatarMenu(false);
     setUploadingAvatar(true);
     try {
       const res = await api.uploadImage(file);
@@ -128,6 +139,31 @@ export function CharacterEditModal({
     } finally {
       setUploadingAvatar(false);
       e.target.value = '';
+    }
+  };
+
+  const handleGenerateAvatar = async () => {
+    const appearance = (draft?.appearance ?? '').trim();
+    if (!appearance) {
+      showMsg('请先填写「外貌」描述，再生成头像');
+      return;
+    }
+    setShowAvatarMenu(false);
+    setGeneratingAvatar(true);
+    try {
+      const res = await api.generateImage(appearance, { gender: draft?.gender });
+      setPendingAvatar(res.imagePath);
+    } catch (err) {
+      showMsg((err as Error).message);
+    } finally {
+      setGeneratingAvatar(false);
+    }
+  };
+
+  const applyPendingAvatar = () => {
+    if (pendingAvatar) {
+      upd('avatar', pendingAvatar);
+      setPendingAvatar(null);
     }
   };
 
@@ -183,28 +219,59 @@ export function CharacterEditModal({
               <div>
                 <label className={labelCls}>头像</label>
                 <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingAvatar}
-                    className="w-16 h-16 rounded-xl bg-bg-muted/90 hover:bg-bg-muted-2/80 border border-border-strong flex flex-col items-center justify-center text-ink transition shadow-2xs disabled:opacity-50"
-                  >
-                    {draft.avatar ? (
-                      <img
-                        src={imageUrl(draft.avatar)}
-                        alt="头像"
-                        className="w-full h-full object-cover rounded-xl"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <>
-                        <span className="text-base leading-none">{uploadingAvatar ? '⏳' : '＋'}</span>
-                        <span className="text-[9px] text-ink-muted mt-0.5">上传</span>
-                      </>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowAvatarMenu((v) => !v)}
+                      disabled={uploadingAvatar || generatingAvatar}
+                      className="w-16 h-16 rounded-xl bg-bg-muted/90 hover:bg-bg-muted-2/80 border border-border-strong flex flex-col items-center justify-center text-ink transition shadow-2xs disabled:opacity-50"
+                    >
+                      {draft.avatar ? (
+                        <img
+                          src={imageUrl(draft.avatar)}
+                          alt="头像"
+                          className="w-full h-full object-cover rounded-xl"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <>
+                          <span className="text-base leading-none">{uploadingAvatar || generatingAvatar ? '⏳' : '＋'}</span>
+                          <span className="text-[9px] text-ink-muted mt-0.5">头像</span>
+                        </>
+                      )}
+                    </button>
+                    {showAvatarMenu && (
+                      <div className="absolute left-0 top-full mt-1 z-20 bg-panel rounded-lg border border-border shadow-lg py-1 min-w-[128px]">
+                        <button
+                          type="button"
+                          onClick={() => { setShowAvatarMenu(false); fileInputRef.current?.click(); }}
+                          className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition"
+                        >
+                          <span>🖼</span>上传图片
+                        </button>
+                        {canGenerate && (
+                          <button
+                            type="button"
+                            onClick={handleGenerateAvatar}
+                            className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition"
+                          >
+                            <span>🎨</span>{generatingAvatar ? '生成中…' : '生成图片'}
+                          </button>
+                        )}
+                        {draft.avatar && (
+                          <button
+                            type="button"
+                            onClick={() => { setShowAvatarMenu(false); setViewerSrc(draft.avatar); }}
+                            className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition"
+                          >
+                            <span>👁</span>查看图片
+                          </button>
+                        )}
+                      </div>
                     )}
-                  </button>
+                  </div>
                   <div className="flex-1 text-[11px] text-ink-muted leading-relaxed">
-                    上传本地图片作为头像，留空则用角色名首字作头像。
+                    上传本地图片，或点「＋」选「生成图片」按外貌生成。留空则用角色名首字作头像。
                   </div>
                 </div>
                 <input
@@ -215,6 +282,57 @@ export function CharacterEditModal({
                   className="hidden"
                 />
                 {canDiff && <DiffHint original={orig('avatar')} current={draft.avatar} />}
+
+                {/* 生成头像独立框：生成中显示 loading，完成显示大图 + 替换/再次生成 */}
+                {(generatingAvatar || pendingAvatar) && (
+                  <div className="mt-3 rounded-xl border border-border bg-bg-soft/50 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-ink">生成头像</span>
+                      {pendingAvatar && (
+                        <button
+                          type="button"
+                          onClick={() => setPendingAvatar(null)}
+                          className="w-6 h-6 rounded flex items-center justify-center text-ink-muted hover:text-ink transition"
+                          aria-label="关闭预览"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    {generatingAvatar ? (
+                      <div className="flex flex-col items-center gap-2 py-8">
+                        <div className="w-6 h-6 border-2 border-ink/20 border-t-ink rounded-full animate-spin" />
+                        <span className="text-xs text-ink-muted">生成中…（约 10 秒）</span>
+                      </div>
+                    ) : pendingAvatar ? (
+                      <>
+                        <img
+                          src={imageUrl(pendingAvatar)}
+                          alt="生成的头像"
+                          className="w-full max-w-[260px] mx-auto rounded-xl border border-border"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="flex items-center justify-center gap-2 mt-3">
+                          <button
+                            type="button"
+                            onClick={applyPendingAvatar}
+                            className="px-4 py-2 rounded-lg bg-solid text-solid-contrast text-xs font-semibold hover:opacity-90 transition"
+                          >
+                            替换头像
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleGenerateAvatar}
+                            disabled={generatingAvatar}
+                            className="px-4 py-2 rounded-lg frosted-glass border border-border text-xs text-ink hover:bg-bg-soft transition disabled:opacity-50"
+                          >
+                            再次生成
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                )}
               </div>
 
               {/* 基础信息 */}
@@ -613,6 +731,8 @@ export function CharacterEditModal({
           </button>
         </div>
       </div>
+
+      {viewerSrc && <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} />}
     </div>
   );
 }

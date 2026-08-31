@@ -22,12 +22,13 @@
  */
 import { db } from '../db';
 import { genId, now, jsonParse } from './util';
-import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, type PromptContext } from '../prompt/builder';
+import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, smsMessageText, type PromptContext } from '../prompt/builder';
 import { retrieveRelevantMemories, maybeFoldSmsIncremental, getUnifiedTimeline } from './memory';
 import { loadCharacterData, getCharacterName } from './character';
 import { getCurrentSchedule, getNpcCurrentLocationName, getNpcInviteLocationId, classifyPersonality } from './schedule';
 import { generateNpcMoment } from '../routes/moments';
 import { sendEmail } from '../routes/email';
+import { generateImage } from './ai-image';
 import type { CharacterData } from '@idate/shared';
 import { DEITY_ID } from '@idate/shared';
 import type { ChatMessage } from '../llm/adapter';
@@ -234,17 +235,18 @@ async function generateProactiveSms(
   characterId: string,
   stage: 0 | 1,
   displayTs?: number,
+  overrideUserPrompt?: string,
 ): Promise<ProactiveSmsResult | null> {
   const characterData = loadCharacterData(playerId, characterId);
   if (!characterData) return null;
 
   const rel = db.prepare('SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { player_description: string; created_at: number } | undefined;
-  const recentMsgs = db.prepare("SELECT sender, body FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 10").all(threadId) as Array<{ sender: string; body: string }>;
+  const recentMsgs = db.prepare("SELECT sender, body, image_asset_id, metadata FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 10").all(threadId) as Array<{ sender: string; body: string; image_asset_id: string | null; metadata: string | null }>;
 
   // 记忆检索
   const retrievedMemories = await retrieveRelevantMemories(
     playerId, characterId,
-    recentMsgs.map(m => ({ role: m.sender, text: m.body })),
+    recentMsgs.map(m => ({ role: m.sender, text: smsMessageText(m) })),
     '',
   );
 
@@ -268,7 +270,7 @@ async function generateProactiveSms(
     chronicleSummary: getUnifiedTimeline(playerId, characterId),
     recentMessages: recentMsgs.reverse().map(m => ({
       role: (m.sender === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
-      text: m.body,
+      text: smsMessageText(m),
     })),
     isTextMessage: true,
     isDeity: false,
@@ -282,23 +284,28 @@ async function generateProactiveSms(
 
   // 根据阶段构造不同的prompt
   let userPrompt: string;
-  if (stage === 0) {
-    // 正常主动消息
-    if (invite) {
-      // 有约会邀请——自然地在短信里提到想见面
-      userPrompt = `（你主动给对方发条消息。你现在在${invite.locationName}，想见对方。
+  if (overrideUserPrompt) {
+    // 特定触发源（如刷到玩家朋友圈来私聊）——用外部给好的提示词，不追加配图说明
+    userPrompt = overrideUserPrompt;
+  } else {
+    if (stage === 0) {
+      // 正常主动消息
+      if (invite) {
+        // 有约会邀请——自然地在短信里提到想见面
+        userPrompt = `（你主动给对方发条消息。你现在在${invite.locationName}，想见对方。
 不要生硬地说"来找我吧"——用你自己的方式自然地表达想见面的意思。可能是聊着聊着顺口提一句"你要不要过来"，可能是直接说"在XX，你来吗"，也可能是绕个弯子。
 消息要符合你的性格和你们的关系——如果你们很熟，可以随意一点；如果不熟，可能含蓄一些。
 先发一两句正常的聊天内容，然后自然地带出见面的话。简短、随意。）`;
-    } else {
-      // 普通主动消息
-      userPrompt = `（你想到了什么，主动给对方发条消息。简短、随意，符合你发短信的习惯。
+      } else {
+        // 普通主动消息
+        userPrompt = `（你想到了什么，主动给对方发条消息。简短、随意，符合你发短信的习惯。
 可以是分享日常、随口一句感慨、或者注意到什么想告诉对方。不要长篇大论。）`;
-    }
-  } else {
-    // 疑惑——此前主动发了消息，对方一直没回。不发"放手"式终结语。
-    userPrompt = `（你之前主动发了消息，但对方一直没回。你有点在意——可能发个"在忙吗？"或者换个话题。
+      }
+    } else {
+      // 疑惑——此前主动发了消息，对方一直没回。不发"放手"式终结语。
+      userPrompt = `（你之前主动发了消息，但对方一直没回。你有点在意——可能发个"在忙吗？"或者换个话题。
 语气因你的性格而异——有的直接问，有的假装不在意地再找话聊。简短，不要显得焦虑或不满。）`;
+    }
   }
 
   const messages: ChatMessage[] = [
@@ -339,7 +346,93 @@ async function generateProactiveSms(
   // 短信记忆折叠
   maybeFoldSmsIncremental(threadId, playerId, characterId).catch(err => console.error('[proactive] maybeFoldSmsIncremental failed:', err instanceof Error ? err.message : err));
 
+  // 男主自主配图：image_prompt 非空 → 异步生成独立图片气泡（文字消息已先入库，不阻塞）
+  const imagePrompt = reply_data.image_prompt?.trim();
+  if (imagePrompt) {
+    void generateProactiveSmsImage(playerId, threadId, imagePrompt, threadTs)
+      .catch(err => console.error('[proactive] 配图生成失败:', err instanceof Error ? err.message : err));
+  }
+
   return result;
+}
+
+/**
+ * NPC 刷到玩家发的朋友圈，主动私聊。
+ * 触发源：玩家发朋友圈后，可见好友 NPC 有几率刷到并来私聊（与评论区评论错开）。
+ */
+export async function generateProactiveSmsAboutMoment(
+  playerId: string,
+  characterId: string,
+  momentContent: string,
+): Promise<ProactiveSmsResult | null> {
+  const thread = db.prepare('SELECT id FROM message_threads WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { id: string } | undefined;
+  if (!thread) return null;
+
+  const prompt = `（你刚刷到玩家发的一条朋友圈：\n\n"${momentContent}"\n\n你有点想私聊她一句——自然地提到你看到了她的朋友圈，或者顺着朋友圈的内容搭话。简短、随意，符合你发短信的习惯。不要长篇大论，也不要显得刻意。）`;
+
+  const result = await generateProactiveSms(playerId, thread.id, characterId, 0, undefined, prompt);
+  if (result) {
+    // 私聊过就清零短信意愿，避免紧接着下一次行程变更又立刻弹主动短信
+    db.prepare('UPDATE relationships SET sms_urge = 0 WHERE player_id = ? AND character_id = ?').run(playerId, characterId);
+  }
+  return result;
+}
+
+/**
+ * 同步插入「载入中」占位气泡（image_asset_id 空 + metadata.pending=true），返回占位消息 id。
+ * 拆出来是为了让 send/retry 路由拿到这个真实 id 返回给前端——前端用它构造占位气泡，
+ * 前后端 id 对齐后，轮询就能按 id 只替换图片那一条，而不是整体替换整个消息列表。
+ */
+export function insertProactiveImagePlaceholder(threadId: string, imagePrompt: string, baseTs: number, proactive = true): string {
+  const imgMsgId = genId();
+  const imgTs = baseTs + 1; // 排在文字消息之后
+  const meta = proactive ? { proactive: true, image: true } : { image: true };
+
+  db.prepare(`
+    INSERT INTO text_messages (id, thread_id, sender, body, status, image_asset_id, created_at, delivered_at, metadata)
+    VALUES (?, ?, 'npc', '', 'delivered', NULL, ?, ?, ?)
+  `).run(imgMsgId, threadId, imgTs, imgTs, JSON.stringify({ ...meta, pending: true, image_prompt: imagePrompt }));
+  db.prepare('UPDATE message_threads SET last_message_at = ?, unread_count = unread_count + 1, updated_at = ? WHERE id = ?')
+    .run(imgTs, imgTs, threadId);
+
+  return imgMsgId;
+}
+
+/**
+ * 异步出图（约 9 秒），成功后把图填进指定 id 的占位气泡，失败则撤掉占位气泡。
+ */
+export async function fillProactiveImage(playerId: string, threadId: string, imgMsgId: string, imagePrompt: string, proactive = true): Promise<void> {
+  const meta = proactive ? { proactive: true, image: true } : { image: true };
+
+  // 取角色外貌+性别，配图出现角色本人时 gemma 用它锚定外貌和称呼（deity 线程查不到角色则留空）
+  const characterId = (db.prepare('SELECT character_id FROM message_threads WHERE id = ?').get(threadId) as { character_id: string } | undefined)?.character_id ?? '';
+  const charData = characterId ? loadCharacterData(playerId, characterId) : null;
+  const appearance = charData?.appearance ?? '';
+  const gender = charData?.gender ?? '';
+  const result = await generateImage(playerId, imagePrompt, { scene: true, appearance, gender });
+  if (!result.ok || !result.filename) {
+    console.error('[proactive] 配图生成失败:', result.error);
+    // 失败：撤掉占位气泡，回退 unread 计数
+    db.prepare('DELETE FROM text_messages WHERE id = ?').run(imgMsgId);
+    db.prepare('UPDATE message_threads SET unread_count = MAX(0, unread_count - 1) WHERE id = ?').run(threadId);
+    return;
+  }
+
+  // 成功：把图填进占位气泡
+  db.prepare(`
+    UPDATE text_messages SET image_asset_id = ?, metadata = ? WHERE id = ?
+  `).run(result.filename, JSON.stringify({ ...meta, image_prompt: imagePrompt }), imgMsgId);
+}
+
+/**
+ * 生成主动短信的配图：插入占位气泡 + 异步填图（组合，供无需拿到占位 id 的场景调用）。
+ * 文字消息已先入库。这里先插入一条「载入中」占位气泡（pending），
+ * 让玩家立刻知道有图在路上；异步出图（约 9 秒）成功后把图填进占位气泡，
+ * 失败则撤掉占位气泡，避免玩家看到卡死的"载入中"。
+ */
+export async function generateProactiveSmsImage(playerId: string, threadId: string, imagePrompt: string, baseTs: number, proactive = true): Promise<void> {
+  const imgMsgId = insertProactiveImagePlaceholder(threadId, imagePrompt, baseTs, proactive);
+  await fillProactiveImage(playerId, threadId, imgMsgId, imagePrompt, proactive);
 }
 
 // ─── 男主来信（邮件）生成 ──────────────────────────────
@@ -374,11 +467,11 @@ async function generateProactiveLetter(
   if (existing) return false;
 
   const rel = db.prepare('SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as { player_description: string; created_at: number } | undefined;
-  const recentMsgs = db.prepare("SELECT sender, body FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 10").all(threadId) as Array<{ sender: string; body: string }>;
+  const recentMsgs = db.prepare("SELECT sender, body, image_asset_id, metadata FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 10").all(threadId) as Array<{ sender: string; body: string; image_asset_id: string | null; metadata: string | null }>;
 
   const retrievedMemories = await retrieveRelevantMemories(
     playerId, characterId,
-    recentMsgs.map(m => ({ role: m.sender, text: m.body })),
+    recentMsgs.map(m => ({ role: m.sender, text: smsMessageText(m) })),
     '',
   );
 
@@ -389,7 +482,7 @@ async function generateProactiveLetter(
     chronicleSummary: getUnifiedTimeline(playerId, characterId),
     recentMessages: recentMsgs.reverse().map(m => ({
       role: (m.sender === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
-      text: m.body,
+      text: smsMessageText(m),
     })),
     isTextMessage: true,
     isDeity: false,

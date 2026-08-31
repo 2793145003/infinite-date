@@ -4,6 +4,8 @@
  */
 import type { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { db } from '../db';
 import { requireAuth, requireAdmin } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
@@ -15,6 +17,15 @@ import { getPublicAvatar } from '../lib/character';
 const HUB_WORLD_ID = 'default-world';
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
+  // 重启后端：detached 脚本延迟 2 秒杀进程后重新启动（自重启，本响应会先返回）
+  app.post('/admin/restart', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const script = path.resolve(process.cwd(), '..', '..', 'restart.sh');
+    const child = spawn('/bin/bash', [script], { detached: true, stdio: 'ignore' });
+    child.unref();
+    return reply.send({ ok: true, message: '后端正在重启，约 3 秒后恢复' });
+  });
+
   // 列出所有公共NPC
   app.get('/admin/characters', async (req, reply) => {
     if (!requireAdmin(req, reply)) return;
