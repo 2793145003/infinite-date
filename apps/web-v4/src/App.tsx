@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Navigation } from './components/Navigation';
 import { HomeScreen } from './components/HomeScreen';
 import { CharacterArchiveScreen } from './components/CharacterArchiveScreen';
@@ -27,6 +27,8 @@ import { FeedbackScreen } from './components/FeedbackScreen';
 import { AdminApp } from './components/AdminApp';
 import { SceneryViewScreen } from './components/SceneryViewScreen';
 import { MissionsApp } from './components/MissionsApp';
+import { PlaneApp } from './components/PlaneApp';
+import { ExperimentalApp } from './components/ExperimentalApp';
 import { ScenarioSceneList } from './components/ScenarioSceneList';
 import { ScenarioSceneDetail } from './components/ScenarioSceneDetail';
 import { ScenarioSceneApp } from './components/ScenarioSceneApp';
@@ -228,8 +230,8 @@ export default function App() {
         const chars: Character[] = [];
         for (const s of summaries) {
           try {
-            const { characterData } = await api.getCharacterEdit(s.characterId);
-            if (characterData) chars.push(mapCharacterDataToCharacter(characterData, s));
+            const { characterDataExpanded } = await api.getCharacterEdit(s.characterId);
+            if (characterDataExpanded) chars.push(mapCharacterDataToCharacter(characterDataExpanded, s));
           } catch (e) {
             console.error('加载角色失败', s.characterId, e);
           }
@@ -314,22 +316,21 @@ export default function App() {
     };
   }, [token, activeTab]);
 
-  // 短信未读角标：登录后拉取 + 每 30 秒刷新（底部导航「聊天」tab 显示未读数量）
+  // 短信未读角标：登录后拉取 + 每 5 秒刷新（底部导航「聊天」tab 显示未读数量）
+  // 30 秒 → 5 秒：修复「新短信红点出现慢」；配合 SmsScreen 读完后立即回调刷新，消除「读完红点消除慢」。
+  const refreshSmsUnread = useCallback(() => {
+    if (!token) return;
+    api.unreadSms()
+      .then((res) => setSmsUnread(res.count || 0))
+      .catch(() => {});
+  }, [token]);
+
   useEffect(() => {
     if (!token) return;
-    let cancelled = false;
-    const load = () => {
-      api.unreadSms()
-        .then((res) => { if (!cancelled) setSmsUnread(res.count || 0); })
-        .catch(() => {});
-    };
-    load();
-    const timer = setInterval(load, 30 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [token]);
+    refreshSmsUnread();
+    const timer = setInterval(refreshSmsUnread, 5 * 1000);
+    return () => clearInterval(timer);
+  }, [refreshSmsUnread]);
 
   const handleLogin = (newToken: string, newPlayer: PlayerInfo) => {
     // 登录新账号前，清理上一个账号的 per-account 本地状态（防跨账号串号）
@@ -380,6 +381,10 @@ export default function App() {
 
   // Character editing state (dedicated standalone page)
   const [editingId, setEditingId] = useState<string | null>(null);
+  // 位面建卡弹窗打开时隐藏底部 dock（避免 z-40 dock 压住 main z-10 内的弹窗）
+  const [planeModalOpen, setPlaneModalOpen] = useState(false);
+  // 位面简介薄纸阶段：dock 保留、背景换薄纸色
+  const [planeThinPaper, setPlaneThinPaper] = useState(false);
 
   // Standalone pages state
   const [sceneryChapterTitle, setSceneryChapterTitle] = useState('私人影院 · 独享包厢');
@@ -498,7 +503,7 @@ export default function App() {
   // 未登录 → 登录页
   if (!token) {
     return (
-      <div className="min-h-screen bg-ripple-pattern relative overflow-x-hidden flex flex-col">
+      <div className="min-h-dvh bg-ripple-pattern relative overflow-x-hidden flex flex-col">
         <LoginScreen onLogin={handleLogin} />
       </div>
     );
@@ -507,7 +512,7 @@ export default function App() {
   // 工作模式（伪装成 AI 助手）：由顶部「工作/灵感」开关控制
   if (workMode) {
     return (
-      <div className="min-h-screen bg-panel relative overflow-x-hidden flex flex-col">
+      <div className="min-h-dvh bg-panel relative overflow-x-hidden flex flex-col">
         <FishMode onExit={() => setWorkMode(false)} />
       </div>
     );
@@ -526,7 +531,7 @@ export default function App() {
               onOpenMapDating={() => setActiveTab('map-dating')}
               onOpenNovel={() => setActiveTab('novels')}
               onOpenScenarios={() => setActiveTab('scenarios')}
-              onOpenTasks={() => setActiveTab('task-world')}
+              onOpenTasks={() => setActiveTab('plane')}
               onOpenCharacterArchive={() => setActiveTab('archive')}
               onOpenMoments={() => setActiveTab('moments')}
               onOpenMailbox={() => setActiveTab('mailbox')}
@@ -569,7 +574,10 @@ export default function App() {
           {activeTab === 'task-world' && (
             <MissionsApp
               onBack={() => setActiveTab('home')}
-              onOpenScene={(sid) => { setScenarioSessionId(sid); setActiveTab('scenario-scene'); }}
+              onOpenScene={(sid) => {
+                setScenarioSessionId(sid);
+                setActiveTab('scenario-scene');
+              }}
             />
           )}
 
@@ -613,6 +621,15 @@ export default function App() {
               currentPlayerId={player?.id ?? null}
             />
           )}
+
+          {activeTab === 'experimental' && (
+            <ExperimentalApp
+              onBack={() => setActiveTab('settings')}
+              onOpenNovels={() => setActiveTab('novels')}
+            />
+          )}
+
+          {activeTab === 'plane' && <PlaneApp onBack={() => setActiveTab('home')} onModalChange={setPlaneModalOpen} onThinPaper={setPlaneThinPaper} />}
 
           {activeTab === 'novel-editor' && (
             <NovelEditor
@@ -663,6 +680,7 @@ export default function App() {
               onOpenConversation={(sid) => { setConversationSessionId(sid); setActiveTab('map-dating'); }}
               onOpenScene={(sid) => { setScenarioSessionId(sid); setActiveTab('scenario-scene'); }}
               initialCharacterId={smsTargetCharacterId}
+              onUnreadChange={refreshSmsUnread}
             />
           )}
 
@@ -706,7 +724,7 @@ export default function App() {
               onNavigate={(view) => {
                 if (view.type === 'feedback') setActiveTab('feedback');
                 else if (view.type === 'admin') setActiveTab('admin');
-                else if (view.type === 'experimental') setActiveTab('novels');
+                else if (view.type === 'experimental') setActiveTab('experimental');
               }}
               onToggleFish={handleToggleFish}
             />
@@ -731,7 +749,7 @@ export default function App() {
         )}
 
         {/* Floating Bottom Navigation（弹窗打开时隐藏，避免透过半透明卡片露出来） */}
-        {!editingId && <Navigation activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={smsUnread} />}
+        {!editingId && !planeModalOpen && <Navigation activeTab={activeTab} setActiveTab={setActiveTab} unreadCount={smsUnread} thinPaper={planeThinPaper} />}
 
         {/* Toast Notification */}
         {toastMessage && (

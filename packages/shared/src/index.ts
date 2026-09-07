@@ -62,6 +62,7 @@ export interface CharacterData {
   player_relation?: string; // 角色和玩家的预设关系，影响初始态度。空=无预设关系
   skills?: string; // 角色擅长的事，自由文本描述。NPC任务时系统据此生成配合特长的世界
   ineptitudes?: string; // 角色不擅长的事，自由文本描述
+  drive?: string; // 内驱力：系统从人设素材提炼的「主动找话题/推进」方向。NSFW/病娇角色无此字段
   sleepType?: 'night_owl' | 'normal'; // 作息类型：夜猫子(白天睡) / 正常人(晚上睡)。LLM创建时推测、管理界面可改
   avatar?: string; // 角色头像（uploads/ 目录下的图片文件名，经 imageUrl() 访问）。空=未设，前端用首字占位
 }

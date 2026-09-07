@@ -51,6 +51,16 @@ export function NovelList({
     }
   };
 
+  const handleDelete = async (novelId: string, title: string) => {
+    if (!window.confirm(`确定删除《${title}》吗？其剧情记录会一并删除，不可恢复。`)) return;
+    try {
+      await api.deleteNovel(novelId);
+      await loadData();
+    } catch (e: any) {
+      window.alert(e?.message || '删除失败');
+    }
+  };
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
       <div className="flex items-center gap-3 border-b border-border frosted-glass px-4 py-3">
@@ -107,6 +117,12 @@ export function NovelList({
                         className="rounded-full border border-border px-2.5 py-0.5 text-xs text-ink-soft"
                         onClick={(e) => { e.stopPropagation(); onOpenEditor(n.id); }}
                       >编辑</button>
+                    )}
+                    {view === 'mine' && (
+                      <button
+                        className="rounded-full border border-status-red/40 px-2.5 py-0.5 text-xs text-status-red"
+                        onClick={(e) => { e.stopPropagation(); handleDelete(n.id, n.title); }}
+                      >删除</button>
                     )}
                     <span className={`rounded-full px-2 py-0.5 text-xs ${n.status === 'published' ? 'bg-bg-rose-soft/60 text-rose' : 'bg-bg-muted/60 text-ink-soft'}`}>
                       {n.status === 'published' ? '已发布' : '草稿'}

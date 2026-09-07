@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { ArrowLeft, Send } from 'lucide-react';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 
 /**
  * 场景对话页（v4 版）—— 从 v2 旧 UI SceneConversation 移植。
@@ -548,7 +547,7 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
     if (!speaker) return undefined;
     const av = avatarByName[speaker];
     if (av) return imageUrl(av);
-    return getAnimeMaleAvatar(speaker);
+    return undefined;
   };
 
   // 操作栏判定：以消息列表为准——最后一个角色/旁白气泡标注重试/继续，最后一个玩家气泡标注撤回

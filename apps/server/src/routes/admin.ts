@@ -216,6 +216,10 @@ ${backgroundParts || '未指定'}
       db.prepare('DELETE FROM turn_player_facts WHERE character_id = ?').run(id);
       db.prepare('DELETE FROM memory_embeddings WHERE character_id = ?').run(id);
       db.prepare('DELETE FROM scene_homes WHERE character_id = ?').run(id);
+      // 清理玩家 fork 副本与角色实例——否则外键 ON DELETE SET NULL 会把 source_character_id 置空，
+      // 留下孤儿数据（is_free_override=1 但 source_character_id=NULL，如历史遗留的「沈惊尘」「白景安」）
+      db.prepare('DELETE FROM character_instances WHERE source_character_id = ?').run(id);
+      db.prepare('DELETE FROM character_player_data WHERE source_character_id = ?').run(id);
       db.prepare('DELETE FROM characters WHERE id = ?').run(id);
       db.exec('COMMIT');
     } catch (err) {

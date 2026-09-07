@@ -12,6 +12,7 @@ import type { CharacterData } from '@idate/shared';
 import { searchCharacter } from '../lib/wiki-search';
 import { spendPlayerPermission } from '../lib/permission';
 import { getCosts } from '../lib/permission-config';
+import { extractDrive } from '../lib/drive';
 
 const CREATION_KEYWORDS = ['召唤新npc', '召唤npc', '创建角色', '新建角色', '召唤新角色'];
 
@@ -127,6 +128,7 @@ function buildCharacterData(draft: Record<string, unknown>): { charData?: Charac
     quirks: String(draft.quirks ?? ''),
     backstory_milestones: normalizeMilestones(draft.backstory_milestones),
     player_relation: String(draft.player_relation ?? '').trim() || undefined,
+    drive: String(draft.drive ?? '').trim() || undefined,
     skills: String(draft.skills ?? '').trim() || undefined,
     ineptitudes: String(draft.ineptitudes ?? '').trim() || undefined,
     sleepType: draft.sleepType === 'night_owl' || draft.sleepType === 'normal' ? draft.sleepType : undefined,
@@ -431,7 +433,13 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
     if (built.error || !built.charData) {
       return reply.code(400).send({ error: built.error ?? '角色数据无效' });
     }
-    const charData = built.charData;
+    let charData = built.charData;
+
+    // 内驱力（drive）：玩家填了就保留，没填则系统从素材自动提炼；NSFW 角色返回 null 则跳过
+    if (!charData.drive) {
+      const drive = await extractDrive(charData);
+      if (drive) charData = { ...charData, drive };
+    }
 
     const pub = isPublic !== false; // 默认公开
 
@@ -487,7 +495,15 @@ export async function creationRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: built.error ?? '角色数据无效' });
     }
 
-    const result = createCharacter(playerId, built.charData, isPublic !== false, undefined);
+    let charData = built.charData;
+
+    // 内驱力（drive）：玩家填了就保留，没填则自动生成
+    if (!charData.drive) {
+      const drive = await extractDrive(charData);
+      if (drive) charData = { ...charData, drive };
+    }
+
+    const result = createCharacter(playerId, charData, isPublic !== false, undefined);
     if (!result.ok) {
       if (result.status === 500) app.log.error({ err: result.error }, '导入角色失败');
       return reply.code(result.status).send({ error: result.error });

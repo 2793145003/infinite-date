@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeftRight, Camera, MapPin, Sparkles, Heart, Bell, Mail, Map, Compass, Clapperboard, BookOpen } from 'lucide-react';
 import { Character, ActivityState } from '../types';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { api } from '../lib/api';
 
 interface HomeScreenProps {
@@ -236,12 +235,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               >
                 {/* Circular Avatar */}
                 <div className="w-18 h-18 rounded-full bg-solid border-2 border-border-soft shadow-xs overflow-hidden flex items-center justify-center text-solid-contrast relative transition-transform group-hover:scale-105">
-                  <img
-                    src={activeCharacter.avatarUrl || getAnimeMaleAvatar(activeCharacter.name)}
-                    alt={activeCharacter.name}
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
+                  {activeCharacter.avatarUrl ? (
+                    <img
+                      src={activeCharacter.avatarUrl}
+                      alt={activeCharacter.name}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span className="text-2xl font-bold">{(activeCharacter.name || '伴').slice(-1)}</span>
+                  )}
                 </div>
               </div>
 
@@ -361,12 +364,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           isCur ? 'bg-solid-soft text-white' : 'bg-bg-muted-2 text-ink'
                         }`}
                       >
-                        <img
-                          src={char.avatarUrl || getAnimeMaleAvatar(char.name)}
-                          alt={char.name}
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
+                        {char.avatarUrl ? (
+                          <img
+                            src={char.avatarUrl}
+                            alt={char.name}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <span>{(char.name || '伴').slice(-1)}</span>
+                        )}
                       </div>
                       <span className="text-[10px] font-medium mt-1 truncate max-w-full">
                         {char.name}
@@ -442,9 +449,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             {/* Right Title */}
             <div className="text-right pr-1">
               <h3 className="text-xs font-bold text-ink group-hover:text-ink tracking-tight transition">
-                任务世界
+                位面任务
               </h3>
-              <span className="text-[10px] text-ink font-normal">待完成</span>
+              <span className="text-[10px] text-ink font-normal">位面委托</span>
             </div>
           </button>
 

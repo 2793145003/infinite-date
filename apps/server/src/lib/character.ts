@@ -16,28 +16,70 @@ import type { CharacterData } from '@idate/shared';
 /**
  * 加载角色数据（玩家视角，fork 优先）
  */
-export function loadCharacterData(playerId: string, characterId: string): CharacterData | null {
+export function loadCharacterDataRaw(playerId: string, characterId: string): CharacterData | null {
+  let data: CharacterData | null = null;
+
   // 1. 玩家 fork（公共角色的个人副本）
   const fork = db.prepare(
     'SELECT character_data FROM character_player_data WHERE player_id = ? AND source_character_id = ?'
   ).get(playerId, characterId) as { character_data: string } | undefined;
-  if (fork) {
-    return jsonParse<CharacterData | null>(fork.character_data, null);
-  }
+  if (fork) data = jsonParse<CharacterData | null>(fork.character_data, null);
 
   // 2. 公共角色模板
-  const pubChar = db.prepare('SELECT character_data FROM characters WHERE id = ?').get(characterId) as { character_data: string } | undefined;
-  if (pubChar) {
-    return jsonParse<CharacterData | null>(pubChar.character_data, null);
+  if (!data) {
+    const pubChar = db.prepare('SELECT character_data FROM characters WHERE id = ?').get(characterId) as { character_data: string } | undefined;
+    if (pubChar) data = jsonParse<CharacterData | null>(pubChar.character_data, null);
   }
 
   // 3. 私有角色（by ID，必须归属当前玩家——否则是越权读取他人私有角色卡）
-  const privChar = db.prepare('SELECT character_data FROM character_player_data WHERE id = ? AND player_id = ?').get(characterId, playerId) as { character_data: string } | undefined;
-  if (privChar) {
-    return jsonParse<CharacterData | null>(privChar.character_data, null);
+  if (!data) {
+    const privChar = db.prepare('SELECT character_data FROM character_player_data WHERE id = ? AND player_id = ?').get(characterId, playerId) as { character_data: string } | undefined;
+    if (privChar) data = jsonParse<CharacterData | null>(privChar.character_data, null);
   }
 
-  return null;
+  return data;
+}
+
+/**
+ * 加载角色数据（玩家视角，fork 优先），并在返回前展开胶囊占位符（{{character_name}}/{{player_name}}）。
+ * 编辑界面不要用这个（会展开成真实名字，诱导作者写死名字），请用 loadCharacterDataRaw 直读胶囊原文。
+ */
+export function loadCharacterData(playerId: string, characterId: string): CharacterData | null {
+  const data = loadCharacterDataRaw(playerId, characterId);
+  if (!data) return null;
+  return expandCapsules(data, getPlayerName(playerId));
+}
+
+/**
+ * 人设人称统一清洗的配套：展开胶囊占位符。
+ *   {{character_name}} → 角色名；{{player_name}} → 玩家昵称。
+ * 清洗把人称代词统一成了胶囊（存库层）；注入 prompt 前在这里展开成真实名字。
+ * 台词类字段（speechStyle.examples.line / textingStyle.examples）清洗时豁免人称替换、不含胶囊，展开不影响它们。
+ */
+export function expandCapsules(data: CharacterData, playerName: string): CharacterData {
+  const charName = data.name || '角色';
+  const pn = playerName || '玩家';
+  const expand = (s: string): string =>
+    s.replace(/\{\{character_name\}\}/g, charName).replace(/\{\{player_name\}\}/g, pn);
+  const walk = (node: unknown): unknown => {
+    if (typeof node === 'string') return expand(node);
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(node as Record<string, unknown>)) {
+        out[k] = walk((node as Record<string, unknown>)[k]);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(data) as CharacterData;
+}
+
+/** 查玩家昵称（无 player 上下文时兜底「玩家」） */
+export function getPlayerName(playerId: string): string {
+  if (!playerId) return '玩家';
+  return (db.prepare('SELECT name FROM players WHERE id = ?').get(playerId) as { name: string } | undefined)?.name || '玩家';
 }
 
 /**
@@ -65,28 +107,19 @@ export function getCharacterName(characterId: string): string {
  *   fork 头像为空字符串 → 回退查公共角色模板头像，避免「只改了性格没动头像就丢公共头像」。
  *   仅头像读取回退，不动 loadCharacterData 全局行为（其他字段仍 fork 优先整体覆盖）。
  */
-export function getCharacterAvatar(playerId: string, characterId: string): string {
-  // 1. 玩家 fork 头像（优先）
-  const fork = db.prepare(
-    'SELECT character_data FROM character_player_data WHERE player_id = ? AND source_character_id = ?'
-  ).get(playerId, characterId) as { character_data: string } | undefined;
-  if (fork) {
-    const fd = jsonParse<CharacterData | null>(fork.character_data, null);
-    if (fd) {
-      if (fd.avatar?.trim()) return safeAvatar(fd.avatar.trim());
-      // fork 头像为空 → 落到公共版（不回退私有角色，因私有角色就是自身）
-      const pub = db.prepare('SELECT character_data FROM characters WHERE id = ?').get(characterId) as { character_data: string } | undefined;
-      if (pub) {
-        const pd = jsonParse<CharacterData | null>(pub.character_data, null);
-        if (pd?.avatar?.trim()) return safeAvatar(pd.avatar.trim());
-      }
-      return '';
-    }
-  }
+export function getCharacterAvatar(playerId: string, characterId: string, charData?: CharacterData | null): string {
+  // 调用方可传入已加载的角色数据（loadCharacterData 结果），避免重复查库（短信列表 N+1 优化）。
+  // loadCharacterData 本身即 fork 优先，与原「先查 fork」路径等价。
+  const data = charData !== undefined ? charData : loadCharacterData(playerId, characterId);
+  if (data?.avatar?.trim()) return safeAvatar(data.avatar.trim());
 
-  // 2. 公共角色模板 / 私有角色（现有 loadCharacterData 路径保底）
-  const data = loadCharacterData(playerId, characterId);
-  return data?.avatar?.trim() ? safeAvatar(data.avatar.trim()) : '';
+  // 头像为空（玩家 fork 了但头像留空 / 未设）→ 回退公共角色模板头像
+  const pub = db.prepare('SELECT character_data FROM characters WHERE id = ?').get(characterId) as { character_data: string } | undefined;
+  if (pub) {
+    const pd = jsonParse<CharacterData | null>(pub.character_data, null);
+    if (pd?.avatar?.trim()) return safeAvatar(pd.avatar.trim());
+  }
+  return '';
 }
 
 /**

@@ -21,66 +21,9 @@ import { grantCharacterPermission } from './permission';
 import { DEITY_ID } from '@idate/shared';
 
 export async function checkNpcTaskInvite(playerId: string): Promise<void> {
-  const ts = Date.now();
-  const today = bjDayKey(ts);
-
-  // 3. 玩家有进行中现场（约会/对话/探索/剧本/任务）→ 不打断
-  if (getActiveLiveSlot(playerId)) return;
-
-  // 玩家已有未处理的 NPC 任务邀请 → 不堆积（一次只留一个待处理邀请）
-  const pending = db.prepare(
-    "SELECT 1 FROM missions WHERE player_id = ? AND quest_type = 'npc' AND status = 'available'",
-  ).get(playerId);
-  if (pending) return;
-
-  const friends = db.prepare(`
-    SELECT f.character_id, r.last_task_invite_day
-    FROM friendships f
-    JOIN relationships r ON r.player_id = f.player_id AND r.character_id = f.character_id
-    WHERE f.player_id = ? AND f.status = 'active' AND f.character_id != ?
-  `).all(playerId, DEITY_ID) as Array<{ character_id: string; last_task_invite_day: string | null }>;
-
-  for (const f of friends) {
-    // 4. 该 NPC 今天发过邀请 → 跳过
-    if (f.last_task_invite_day === today) continue;
-
-    // 该 NPC 有未完成的 NPC 任务（available/active/solo）→ 不重复邀请
-    const npcBusy = db.prepare(`
-      SELECT 1 FROM missions WHERE player_id = ? AND assignee_id = ? AND quest_type = 'npc'
-        AND status IN ('available', 'active', 'solo')
-    `).get(playerId, f.character_id);
-    if (npcBusy) continue;
-
-    const charData = loadCharacterData(playerId, f.character_id);
-    if (!charData) continue;
-
-    // 2. 空档段：非 sleep + 不在约会 + 在主城（有行程）
-    const online = getNpcOnlineState(playerId, f.character_id, charData as unknown as Record<string, any>, ts);
-    if (online === 'sleep') continue;
-
-    const inDate = db.prepare(`
-      SELECT 1 FROM conversation_sessions WHERE player_id = ? AND character_id = ? AND ended = 0
-      UNION ALL
-      SELECT 1 FROM scene_sessions ss, json_each(ss.character_ids) j
-      WHERE ss.player_id = ? AND j.value = ? AND ss.ended = 0
-      LIMIT 1
-    `).get(playerId, f.character_id, playerId, f.character_id);
-    if (inDate) continue;
-
-    const schedule = getCurrentSchedule(playerId, f.character_id, charData as unknown as Record<string, any>, ts);
-    if (!schedule) continue;
-
-    // 判定通过 → 生成任务 + 发邀请短信 + 记 last_task_invite_day
-    try {
-      const built = await buildNpcMission(playerId, f.character_id);
-      insertNpcSms(playerId, f.character_id, built.world.briefing?.trim() || built.world.summary, { task_invite: { missionId: built.missionId } });
-      db.prepare('UPDATE relationships SET last_task_invite_day = ? WHERE player_id = ? AND character_id = ?')
-        .run(today, playerId, f.character_id);
-      break; // 每次 tick 每玩家最多触发 1 个邀请
-    } catch (err) {
-      console.error('[npc-task] invite failed for', playerId, f.character_id, err instanceof Error ? err.message : err);
-    }
-  }
+  // [下线] NPC 邀请任务已替换为位面任务系统（buildNpcMission 底层保留待用）
+  void playerId;
+  return;
 }
 
 /** 扫描到期的 solo 任务 → completed + NPC 回归短信（"回来晚了" + 分享成果） */

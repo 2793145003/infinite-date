@@ -37,7 +37,7 @@ export function initTutorialData(playerId: string, playerName: string): void {
     const ts = now();
     db.prepare(`
       INSERT INTO message_threads (id, player_id, character_id, last_message_at, unread_count, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?)
+      VALUES (?, ?, ?, ?, 0, ?, ?)
     `).run(threadId, playerId, DEITY_ID, ts, ts, ts);
 
     const msgId = genId();

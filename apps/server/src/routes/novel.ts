@@ -213,6 +213,124 @@ function buildContext(sessionId: string): { summary: string; recentText: string;
   };
 }
 
+// ── 世界状态：填表法抽取 + 注入 ─────────────────────────
+// 时段词序列（与 novel.summary 推断一致，补上「凌晨」；「下午」口语在库里记「午后」）
+const PERIODS = ['凌晨', '清晨', '上午', '中午', '午后', '傍晚', '夜晚', '深夜'];
+// 口语别名 → 标准时段
+const PERIOD_ALIAS: Record<string, string> = {
+  '早晨': '上午', '早上': '上午', '下午': '午后', '晚上': '夜晚', '半夜': '深夜', '白天': '上午',
+};
+
+// 待办「when」相对当前时间的距离，决定注入时是否降级：跨 ≥2 段降级为「稍后」，避免具体时段词诱导续写跳段
+export function degradeWhen(when: string, currentTime: string): string {
+  if (!when) return '';
+  // 跨天/未来某天的时间锚保留（跨天锚能拦住提前执行，不降级）
+  if (/明天|后天|明早|明晚|下周|下个月|第\d+天/.test(when)) return when;
+  const curMatch = currentTime.match(/[·.]([^·.]+)$/);
+  const curPeriod = curMatch ? curMatch[1] : '';
+  if (!curPeriod) return when;
+  // when 里出现的时段词（先查标准词，再查别名）
+  const targetRaw = PERIODS.find((p) => when.includes(p)) || Object.keys(PERIOD_ALIAS).find((a) => when.includes(a));
+  if (!targetRaw) return when; // 没有具体时段词（如「等会儿」）→ 原样
+  const ci = PERIODS.indexOf(PERIOD_ALIAS[curPeriod] || curPeriod);
+  const ti = PERIODS.indexOf(PERIOD_ALIAS[targetRaw] || targetRaw);
+  if (ci < 0 || ti < 0) return when;
+  // 环形距离（时段首尾相接：深夜→凌晨→清晨）：相邻或同时段照写，跨 ≥2 段降级
+  const dist = (ti - ci + PERIODS.length) % PERIODS.length;
+  return dist <= 1 ? when : '稍后';
+}
+
+// 填表法 JSON Schema：角色名做成「命名字段」——required 强制每人恰好一格，additionalProperties:false 禁发明人名。
+// 比数组枚举更硬：数组无法约束「每个角色只出现一次」，模型会把同一角色重复填出超长输出导致截断。
+function buildWorldStateSchema(names: string[]): Record<string, unknown> {
+  const charSchema = {
+    type: 'object',
+    properties: {
+      current: {
+        type: 'object',
+        properties: { where: { type: 'string' }, what: { type: 'string' } },
+        required: ['where', 'what'],
+      },
+      todo: {
+        type: 'object',
+        properties: { when: { type: 'string' }, what: { type: 'string' } },
+        required: ['when', 'what'],
+      },
+    },
+    required: ['current', 'todo'],
+  };
+  const props: Record<string, unknown> = {};
+  for (const n of names) props[n] = charSchema;
+  return {
+    type: 'object',
+    properties: props,
+    required: names,
+    additionalProperties: false,
+  };
+}
+
+// 世界状态 JSON → 注入文本（当前状态块 + 待办块），待办按当前时间降级
+export function buildWorldStateText(worldStateJson: string, currentTime: string): string {
+  if (!worldStateJson) return '';
+  const parsed = jsonParse<Record<string, {
+    current?: { where?: string; what?: string };
+    todo?: { when?: string; what?: string };
+  }> | null>(worldStateJson, null);
+  if (!parsed) return '';
+
+  const stateLines: string[] = [];
+  const todoLines: string[] = [];
+  for (const [name, entry] of Object.entries(parsed)) {
+    const cur = entry.current;
+    if (cur && (cur.where || cur.what)) {
+      const loc = cur.where ? `在${cur.where}` : '';
+      const act = cur.what ? (cur.where ? `，${cur.what}` : cur.what) : '';
+      stateLines.push(`- ${name}：${loc}${act}`);
+    }
+    const todo = entry.todo;
+    if (todo && todo.what) {
+      const when = degradeWhen(todo.when || '', currentTime);
+      const tag = when ? `（${when}）` : '';
+      todoLines.push(`- ${name}${tag}：${todo.what}`);
+    }
+  }
+
+  let out = '';
+  if (stateLines.length) out += '当前世界状态（谁在哪、正在做什么）：\n' + stateLines.join('\n');
+  if (todoLines.length) out += (out ? '\n\n' : '') + '尚未完成的约定/待办：\n' + todoLines.join('\n');
+  return out;
+}
+
+// 异步抽取世界状态快照（填表法），存到 novel_sessions.world_state（不阻塞续写）
+async function extractWorldState(sessionId: string, playerId: string): Promise<void> {
+  const session = db.prepare('SELECT novel_id, excluded_chars FROM novel_sessions WHERE id = ?').get(sessionId) as any;
+  if (!session) return;
+  const { name } = getProtagonist(playerId);
+  const excludedIds = jsonParse<string[]>(session.excluded_chars, []);
+  const excludedSet = new Set(excludedIds);
+
+  // 名单：active 角色 + 玩家（name enum 用）
+  const chars = db.prepare('SELECT id, name FROM novel_characters WHERE novel_id = ? ORDER BY created_at').all(session.novel_id) as { id: string; name: string }[];
+  const names = [...chars.filter((c) => !excludedSet.has(c.id)).map((c) => c.name), name];
+
+  const { recentText, currentTime } = buildContext(sessionId);
+  const filled = renderPrompt(loadPrompt('novel.world-state'), {
+    characters: buildCharactersText(session.novel_id, excludedIds),
+    recent_text: expandPlayerName(recentText, name),
+    current_time: currentTime,
+    player_name: name,
+  });
+
+  const result = await chat(
+    [{ role: 'system', content: filled }],
+    { temperature: 0.2, maxTokens: 1024, guidedJson: buildWorldStateSchema(names), playerId, sessionId, callType: 'novel_world_state' },
+  );
+
+  const parsed = tryParseJsonReply(result.content);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+  db.prepare('UPDATE novel_sessions SET world_state = ? WHERE id = ?').run(JSON.stringify(parsed), sessionId);
+}
+
 // 异步生成某段的段摘要 + 该段发生的时间，写回 turn.summary / turn.time（不阻塞续写响应）
 async function generateTurnSummary(sessionId: string, turnId: string, text: string, playerId: string): Promise<void> {
   const { name } = getProtagonist(playerId);
@@ -824,6 +942,7 @@ export async function novelRoutes(app: FastifyInstance): Promise<void> {
     const charactersText = buildCharactersText(session.novel_id, excludedIds);
 
     const { summary, recentText, currentTime } = buildContext(sessionId);
+    const worldStateText = buildWorldStateText(session.world_state, currentTime);
     const continuePrompt = loadPrompt('novel.continue');
     const filledPrompt = renderPrompt(continuePrompt, {
       world_setting: expandPlayerName(novel.world_setting || '', name),
@@ -834,6 +953,7 @@ export async function novelRoutes(app: FastifyInstance): Promise<void> {
       summary: expandPlayerName(summary, name),
       recent_text: expandPlayerName(recentText, name),
       current_time: currentTime,
+      world_state: worldStateText,
     });
 
     const messages: ChatMessage[] = [
@@ -882,6 +1002,8 @@ export async function novelRoutes(app: FastifyInstance): Promise<void> {
         .catch(err => app.log.error({ err }, '段摘要生成失败'));
       void updateStoryOverview(sessionId, playerId)
         .catch(err => app.log.error({ err }, '总览更新失败'));
+      void extractWorldState(sessionId, playerId)
+        .catch(err => app.log.error({ err }, '世界状态抽取失败'));
 
       send({ type: 'done', text: continuation });
       raw.end();

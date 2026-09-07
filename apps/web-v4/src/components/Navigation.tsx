@@ -6,12 +6,14 @@ interface NavigationProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   unreadCount?: number;
+  thinPaper?: boolean;
 }
 
 export const Navigation: React.FC<NavigationProps> = ({
   activeTab,
   setActiveTab,
   unreadCount = 0,
+  thinPaper = false,
 }) => {
   const navItems = [
     { id: 'home' as ActiveTab, label: '首页', icon: Home },
@@ -27,7 +29,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       aria-label="主底部导航"
       className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 w-[90%] max-w-sm"
     >
-      <div className="frosted-dock rounded-full px-2 py-1.5 flex items-center justify-around">
+      <div className={`${thinPaper ? 'bg-bg-soft/92' : 'frosted-dock'} rounded-full px-2 py-1.5 flex items-center justify-around`}>
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;

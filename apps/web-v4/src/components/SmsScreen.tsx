@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, ArrowLeft, Image as ImageIcon, MapPin, Target } from 'lucide-react';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { imageUrl, api } from '../lib/api';
 import { ImageViewer } from './ImageViewer';
 
@@ -43,6 +42,8 @@ interface SmsScreenProps {
   onOpenScene?: (sessionId: string) => void;
   /** 传入后自动打开该角色的短信线程（而不是停在列表） */
   initialCharacterId?: string | null;
+  /** 标记已读/发送后立即刷新底部未读角标（避免等轮询） */
+  onUnreadChange?: () => void;
 }
 
 const onlineLabel = (state: string): string => {
@@ -70,7 +71,7 @@ const formatTime = (ts: number): string => {
   return `${h}:${m}`;
 };
 
-export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHome, onOpenCharacterArchive, onOpenConversation, onOpenScene, initialCharacterId }) => {
+export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHome, onOpenCharacterArchive, onOpenConversation, onOpenScene, initialCharacterId, onUnreadChange }) => {
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [activeThread, setActiveThread] = useState<SmsThread | null>(null);
   const [messages, setMessages] = useState<SmsMessage[]>([]);
@@ -150,7 +151,10 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
     setInvite(null);
     fetch(`/v4/api/sms/threads/${target.id}/messages`)
       .then((res) => res.json())
-      .then((data) => setMessages((data.messages || []).map(mapSmsMessage)))
+      .then((data) => {
+        setMessages((data.messages || []).map(mapSmsMessage));
+        onUnreadChange?.();
+      })
       .catch((e) => {
         console.error('加载消息失败', e);
         setMessages([]);
@@ -202,6 +206,7 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
       const data = await res.json();
       setMessages((data.messages || []).map(mapSmsMessage));
       loadThreads();
+      onUnreadChange?.();
     } catch (e) {
       console.error('加载消息失败', e);
       setMessages([]);
@@ -505,12 +510,16 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
                     {thread.character_id === 'DEITY' ? (
                       <div className="w-12 h-12 rounded-full flex items-center justify-center bg-bg-amber-soft text-amber text-lg border border-border/80 shadow-2xs">⚡</div>
                     ) : (
-                      <img
-                        src={thread.avatar ? imageUrl(thread.avatar) : getAnimeMaleAvatar(thread.character_name)}
-                        alt={thread.character_name}
-                        referrerPolicy="no-referrer"
-                        className="w-12 h-12 rounded-full object-cover border border-border/80 shadow-2xs"
-                      />
+                      thread.avatar ? (
+                        <img
+                          src={imageUrl(thread.avatar)}
+                          alt={thread.character_name}
+                          referrerPolicy="no-referrer"
+                          className="w-12 h-12 rounded-full object-cover border border-border/80 shadow-2xs"
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full border border-border/80 shadow-2xs bg-bg-muted-2 flex items-center justify-center text-ink font-bold">{(thread.character_name || '伴').slice(-1)}</div>
+                      )
                     )}
                     <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-1.5 ring-white ${onlineDot(thread.online_state)}`} />
                   </div>
@@ -545,18 +554,20 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
 
   // ============ 线程详情视图 ============
   const isDeity = activeThread.character_id === 'DEITY';
-  const avatar = activeThread.avatar ? imageUrl(activeThread.avatar) : getAnimeMaleAvatar(activeThread.character_name);
-  // 主神头像：⚡ 闪电图标 + 琥珀底（照 v3），非主神用图片
+  const avatar = activeThread.avatar ? imageUrl(activeThread.avatar) : '';
+  // 主神头像：⚡ 闪电图标 + 琥珀底（照 v3），非主神有图用图、无图用首字
   const renderAvatar = (cls: string) =>
     isDeity ? (
       <div className={`${cls} rounded-full flex items-center justify-center bg-bg-amber-soft text-amber border border-border/80 shadow-2xs shrink-0`}>⚡</div>
-    ) : (
+    ) : avatar ? (
       <img
         src={avatar}
         alt={activeThread.character_name}
         referrerPolicy="no-referrer"
         className={`${cls} rounded-full object-cover shrink-0 border border-border/80 shadow-2xs`}
       />
+    ) : (
+      <div className={`${cls} rounded-full flex items-center justify-center bg-bg-muted-2 text-ink font-bold border border-border/80 shadow-2xs shrink-0`}>{(activeThread.character_name || '伴').slice(-1)}</div>
     );
 
   return (

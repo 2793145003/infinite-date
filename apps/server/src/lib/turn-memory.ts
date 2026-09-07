@@ -86,7 +86,7 @@ async function doFoldTurnSegment(opts: {
     ORDER BY round_no DESC LIMIT ?
   `).all(opts.sceneSessionId, opts.characterId, opts.roundNo, PLAYER_FACT_KNOWN_LIMIT) as { fact: string }[];
   const knownBlock = knownFacts.length
-    ? knownFacts.map(f => `- ${f}`).join('\n')
+    ? knownFacts.map(f => `- ${f.fact}`).join('\n')
     : '（暂无）';
 
   const system = `你是一个记忆整理系统。以下是一个约会/场景中「${opts.characterName}」这一角的单轮记录。

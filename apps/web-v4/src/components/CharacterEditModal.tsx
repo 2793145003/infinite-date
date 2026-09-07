@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, imageUrl } from '../lib/api';
 import { ImageViewer } from './ImageViewer';
+import { CapsuleField } from './CapsuleField';
 
 type Draft = Record<string, any>;
 
@@ -377,12 +378,14 @@ export function CharacterEditModal({
                     </div>
                   </div>
                   <div>
-                    <label className={labelCls}>外貌</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="外貌"
+                      labelClassName={labelCls}
                       value={draft.appearance ?? ''}
-                      onChange={(e) => upd('appearance', e.target.value)}
+                      onChange={(v) => upd('appearance', v)}
                       placeholder="外貌、气质、穿着……"
+                      inputClassName={areaCls}
                     />
                     {canDiff && <DiffHint original={orig('appearance')} current={draft.appearance} />}
                   </div>
@@ -395,15 +398,13 @@ export function CharacterEditModal({
                 <div className="space-y-2.5">
                   {(['surface', 'core', 'extreme'] as const).map((k) => (
                     <div key={k}>
-                      <label className={labelCls}>
-                        {k === 'surface' ? '表层' : k === 'core' ? '内核' : '极端'}
-                      </label>
-                      <textarea
-                        className={areaCls}
+                      <CapsuleField
+                        characterName={draft.name}
+                        label={k === 'surface' ? '表层' : k === 'core' ? '内核' : '极端'}
+                        labelClassName={labelCls}
                         value={draft.personality?.[k] ?? ''}
-                        onChange={(e) =>
-                          upd(`personality.${k}`, e.target.value)
-                        }
+                        onChange={(v) => upd(`personality.${k}`, v)}
+                        inputClassName={areaCls}
                       />
                       {canDiff && (
                         <DiffHint original={orig(`personality.${k}`)} current={draft.personality?.[k]} />
@@ -418,13 +419,13 @@ export function CharacterEditModal({
                 <div className={sectionCls}>说话风格</div>
                 <div className="space-y-2.5">
                   <div>
-                    <label className={labelCls}>概述</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="概述"
+                      labelClassName={labelCls}
                       value={draft.speechStyle?.description ?? ''}
-                      onChange={(e) =>
-                        upd('speechStyle.description', e.target.value)
-                      }
+                      onChange={(v) => upd('speechStyle.description', v)}
+                      inputClassName={areaCls}
                     />
                     {canDiff && (
                       <DiffHint
@@ -464,13 +465,13 @@ export function CharacterEditModal({
                 <div className={sectionCls}>短信风格</div>
                 <div className="space-y-2.5">
                   <div>
-                    <label className={labelCls}>概述</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="概述"
+                      labelClassName={labelCls}
                       value={draft.textingStyle?.description ?? ''}
-                      onChange={(e) =>
-                        upd('textingStyle.description', e.target.value)
-                      }
+                      onChange={(v) => upd('textingStyle.description', v)}
+                      inputClassName={areaCls}
                     />
                     {canDiff && (
                       <DiffHint
@@ -513,13 +514,13 @@ export function CharacterEditModal({
                     };
                     return (
                       <div key={k}>
-                        <label className={labelCls}>{labels[k]}</label>
-                        <textarea
-                          className={areaCls}
+                        <CapsuleField
+                          characterName={draft.name}
+                          label={labels[k]}
+                          labelClassName={labelCls}
                           value={draft.emotional_signals?.[k] ?? ''}
-                          onChange={(e) =>
-                            upd(`emotional_signals.${k}`, e.target.value)
-                          }
+                          onChange={(v) => upd(`emotional_signals.${k}`, v)}
+                          inputClassName={areaCls}
                         />
                         {canDiff && (
                           <DiffHint
@@ -545,13 +546,13 @@ export function CharacterEditModal({
                     };
                     return (
                       <div key={k}>
-                        <label className={labelCls}>{labels[k]}</label>
-                        <textarea
-                          className={areaCls}
+                        <CapsuleField
+                          characterName={draft.name}
+                          label={labels[k]}
+                          labelClassName={labelCls}
                           value={draft.background?.[k] ?? ''}
-                          onChange={(e) =>
-                            upd(`background.${k}`, e.target.value)
-                          }
+                          onChange={(v) => upd(`background.${k}`, v)}
+                          inputClassName={areaCls}
                         />
                         {canDiff && (
                           <DiffHint original={orig(`background.${k}`)} current={draft.background?.[k]} />
@@ -607,43 +608,63 @@ export function CharacterEditModal({
                     {canDiff && <DiffHint original={orig('dislikes')} current={draft.dislikes} />}
                   </div>
                   <div>
-                    <label className={labelCls}>底线</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="底线"
+                      labelClassName={labelCls}
                       value={draft.boundaries ?? ''}
-                      onChange={(e) => upd('boundaries', e.target.value)}
+                      onChange={(v) => upd('boundaries', v)}
+                      inputClassName={areaCls}
                     />
                     {canDiff && <DiffHint original={orig('boundaries')} current={draft.boundaries} />}
                   </div>
                   <div>
-                    <label className={labelCls}>目标</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="目标"
+                      labelClassName={labelCls}
                       value={draft.goals ?? ''}
-                      onChange={(e) => upd('goals', e.target.value)}
+                      onChange={(v) => upd('goals', v)}
+                      inputClassName={areaCls}
                     />
                     {canDiff && <DiffHint original={orig('goals')} current={draft.goals} />}
                   </div>
                   <div>
-                    <label className={labelCls}>怪癖</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="怪癖"
+                      labelClassName={labelCls}
                       value={draft.quirks ?? ''}
-                      onChange={(e) => upd('quirks', e.target.value)}
+                      onChange={(v) => upd('quirks', v)}
+                      inputClassName={areaCls}
                     />
                     {canDiff && <DiffHint original={orig('quirks')} current={draft.quirks} />}
                   </div>
                   <div>
-                    <label className={labelCls}>与玩家的关系</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="与玩家的关系"
+                      labelClassName={labelCls}
                       value={draft.player_relation ?? ''}
-                      onChange={(e) => upd('player_relation', e.target.value)}
+                      onChange={(v) => upd('player_relation', v)}
                       placeholder="无特殊关系则留空"
+                      inputClassName={areaCls}
                     />
                     {canDiff && (
                       <DiffHint original={orig('player_relation')} current={draft.player_relation} />
                     )}
+                  </div>
+                  <div>
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="内驱力"
+                      labelClassName={labelCls}
+                      value={draft.drive ?? ''}
+                      onChange={(v) => upd('drive', v === '' ? undefined : v)}
+                      placeholder="系统从人设自动提炼的「主动找话题/推进」方向，可改可留空（留空则按人设自然互动）"
+                      inputClassName={areaCls}
+                    />
+                    {canDiff && <DiffHint original={orig('drive')} current={draft.drive} />}
                   </div>
                   <div>
                     <label className={labelCls}>作息类型</label>
@@ -662,22 +683,26 @@ export function CharacterEditModal({
                     {canDiff && <DiffHint original={orig('sleepType')} current={draft.sleepType} />}
                   </div>
                   <div>
-                    <label className={labelCls}>擅长</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="擅长"
+                      labelClassName={labelCls}
                       value={draft.skills ?? ''}
-                      onChange={(e) => upd('skills', e.target.value)}
+                      onChange={(v) => upd('skills', v)}
                       placeholder="战斗、生活技能、知识领域、社交特长……"
+                      inputClassName={areaCls}
                     />
                     {canDiff && <DiffHint original={orig('skills')} current={draft.skills} />}
                   </div>
                   <div>
-                    <label className={labelCls}>不擅长</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label="不擅长"
+                      labelClassName={labelCls}
                       value={draft.ineptitudes ?? ''}
-                      onChange={(e) => upd('ineptitudes', e.target.value)}
+                      onChange={(v) => upd('ineptitudes', v)}
                       placeholder="软肋、不感兴趣、总做不好的事……"
+                      inputClassName={areaCls}
                     />
                     {canDiff && (
                       <DiffHint original={orig('ineptitudes')} current={draft.ineptitudes} />

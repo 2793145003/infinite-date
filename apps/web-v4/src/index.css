@@ -257,6 +257,11 @@
   cursor: default;
 }
 
+/* 角色名胶囊：与玩家胶囊区分颜色（玫红 vs 主题强调色） */
+.player-chip.char-chip {
+  background: var(--rose);
+}
+
 .player-chip-input:empty::before {
   content: attr(data-placeholder);
   color: var(--text-mute);
@@ -271,6 +276,7 @@ input::placeholder, textarea::placeholder {
   color: var(--text-mute);
   opacity: 1;
 }
+
 
 /* 摸鱼模式打字动画（三点跳动） */
 .fish-typing-dot {
@@ -298,6 +304,30 @@ input::placeholder, textarea::placeholder {
     transform: translateY(-4px);
     opacity: 1;
   }
+}
+
+/* === 任务大厅：开场白/输入框弹出 === */
+@keyframes idate-intro-pop {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.idate-intro-pop {
+  animation: idate-intro-pop 0.4s ease-out;
+}
+
+/* === 任务大厅：卡片切换淡入（纯 opacity，不干扰 transform 滑动跟手） === */
+@keyframes plane-card-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.plane-card-fade-in {
+  animation: plane-card-fade 0.2s ease-out;
 }
 
 /* === 从 v3 index.css 提取：设置页 CSS（:root 变量 + 主题 + id-* / image-upload / avatar-crop 组件） === */
@@ -886,3 +916,12 @@ input::placeholder, textarea::placeholder {
   padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
 }
+
+/* --- 移动端视口高度：dvh 旧浏览器回退 vh（unlayered 优先级高于 tailwind layer） --- */
+.h-dvh { height: 100vh; }
+.min-h-dvh { min-height: 100vh; }
+@supports (height: 100dvh) {
+  .h-dvh { height: 100dvh; }
+  .min-h-dvh { min-height: 100dvh; }
+}
+

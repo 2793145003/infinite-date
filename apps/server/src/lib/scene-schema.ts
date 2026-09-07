@@ -76,7 +76,8 @@ export const SCENE_SCHEMA_SQL = `
     dream_text          TEXT,
     dream_custom        INTEGER NOT NULL DEFAULT 0,
     ambient_config      TEXT NOT NULL DEFAULT '',
-    goal_achieved       INTEGER NOT NULL DEFAULT 0
+    goal_achieved       INTEGER NOT NULL DEFAULT 0,
+    plane_character_id  TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_scene_sessions_player_ended ON scene_sessions(player_id, ended);
   CREATE INDEX IF NOT EXISTS idx_scene_sessions_player_type_ended ON scene_sessions(player_id, scene_type, ended);

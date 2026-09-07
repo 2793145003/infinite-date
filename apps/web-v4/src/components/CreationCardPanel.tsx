@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, imageUrl } from '../lib/api';
 import { ImageViewer } from './ImageViewer';
+import { CapsuleField } from './CapsuleField';
 
 /**
  * 聊天式创建角色：角色卡编辑面板（draft 直接用后端 CharacterData 结构，字段与数据库对齐）。
@@ -247,12 +248,14 @@ export function CreationCardPanel({
                 </div>
               </div>
               <div>
-                <label className={labelCls}>外貌</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="外貌"
+                  labelClassName={labelCls}
                   value={draft.appearance ?? ''}
-                  onChange={(e) => set({ appearance: e.target.value })}
+                  onChange={(v) => set({ appearance: v })}
                   placeholder="外貌、气质、穿着……"
+                  inputClassName={areaCls}
                 />
               </div>
             </div>
@@ -264,13 +267,13 @@ export function CreationCardPanel({
             <div className="space-y-2.5">
               {(['surface', 'core', 'extreme'] as const).map((k) => (
                 <div key={k}>
-                  <label className={labelCls}>
-                    {k === 'surface' ? '表层' : k === 'core' ? '内核' : '极端'}
-                  </label>
-                  <textarea
-                    className={areaCls}
+                  <CapsuleField
+                    characterName={draft.name}
+                    label={k === 'surface' ? '表层' : k === 'core' ? '内核' : '极端'}
+                    labelClassName={labelCls}
                     value={draft.personality?.[k] ?? ''}
-                    onChange={(e) => set({ personality: { ...draft.personality, [k]: e.target.value } })}
+                    onChange={(v) => set({ personality: { ...draft.personality, [k]: v } })}
+                    inputClassName={areaCls}
                   />
                 </div>
               ))}
@@ -282,11 +285,13 @@ export function CreationCardPanel({
             <div className="text-[11px] font-bold text-ink-muted uppercase tracking-wide mb-2">说话风格</div>
             <div className="space-y-2.5">
               <div>
-                <label className={labelCls}>概述</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="概述"
+                  labelClassName={labelCls}
                   value={draft.speechStyle?.description ?? ''}
-                  onChange={(e) => set({ speechStyle: { ...draft.speechStyle, description: e.target.value } })}
+                  onChange={(v) => set({ speechStyle: { ...draft.speechStyle, description: v } })}
+                  inputClassName={areaCls}
                 />
               </div>
               {(draft.speechStyle?.examples ?? []).map((ex: any, i: number) => (
@@ -311,11 +316,13 @@ export function CreationCardPanel({
             <div className="text-[11px] font-bold text-ink-muted uppercase tracking-wide mb-2">短信风格</div>
             <div className="space-y-2.5">
               <div>
-                <label className={labelCls}>概述</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="概述"
+                  labelClassName={labelCls}
                   value={draft.textingStyle?.description ?? ''}
-                  onChange={(e) => set({ textingStyle: { ...draft.textingStyle, description: e.target.value } })}
+                  onChange={(v) => set({ textingStyle: { ...draft.textingStyle, description: v } })}
+                  inputClassName={areaCls}
                 />
               </div>
               {(draft.textingStyle?.examples ?? []).map((ex: string, i: number) => (
@@ -349,13 +356,13 @@ export function CreationCardPanel({
                 };
                 return (
                   <div key={k}>
-                    <label className={labelCls}>{labels[k]}</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label={labels[k]}
+                      labelClassName={labelCls}
                       value={draft.emotional_signals?.[k] ?? ''}
-                      onChange={(e) =>
-                        set({ emotional_signals: { ...draft.emotional_signals, [k]: e.target.value } })
-                      }
+                      onChange={(v) => set({ emotional_signals: { ...draft.emotional_signals, [k]: v } })}
+                      inputClassName={areaCls}
                     />
                   </div>
                 );
@@ -371,11 +378,13 @@ export function CreationCardPanel({
                 const labels: Record<string, string> = { origin: '出身', shaping: '经历', current: '现状' };
                 return (
                   <div key={k}>
-                    <label className={labelCls}>{labels[k]}</label>
-                    <textarea
-                      className={areaCls}
+                    <CapsuleField
+                      characterName={draft.name}
+                      label={labels[k]}
+                      labelClassName={labelCls}
                       value={draft.background?.[k] ?? ''}
-                      onChange={(e) => set({ background: { ...draft.background, [k]: e.target.value } })}
+                      onChange={(v) => set({ background: { ...draft.background, [k]: v } })}
+                      inputClassName={areaCls}
                     />
                   </div>
                 );
@@ -422,54 +431,66 @@ export function CreationCardPanel({
                 />
               </div>
               <div>
-                <label className={labelCls}>底线</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="底线"
+                  labelClassName={labelCls}
                   value={draft.boundaries ?? ''}
-                  onChange={(e) => set({ boundaries: e.target.value })}
+                  onChange={(v) => set({ boundaries: v })}
+                  inputClassName={areaCls}
                 />
               </div>
               <div>
-                <label className={labelCls}>目标</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="目标"
+                  labelClassName={labelCls}
                   value={draft.goals ?? ''}
-                  onChange={(e) => set({ goals: e.target.value })}
+                  onChange={(v) => set({ goals: v })}
+                  inputClassName={areaCls}
                 />
               </div>
               <div>
-                <label className={labelCls}>怪癖</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="怪癖"
+                  labelClassName={labelCls}
                   value={draft.quirks ?? ''}
-                  onChange={(e) => set({ quirks: e.target.value })}
+                  onChange={(v) => set({ quirks: v })}
+                  inputClassName={areaCls}
                 />
               </div>
               <div>
-                <label className={labelCls}>与玩家的关系</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="与玩家的关系"
+                  labelClassName={labelCls}
                   value={draft.player_relation ?? ''}
-                  onChange={(e) => set({ player_relation: e.target.value })}
+                  onChange={(v) => set({ player_relation: v })}
                   placeholder="无特殊关系则留空"
+                  inputClassName={areaCls}
                 />
               </div>
               <div>
-                <label className={labelCls}>擅长</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="擅长"
+                  labelClassName={labelCls}
                   value={draft.skills ?? ''}
-                  onChange={(e) => set({ skills: e.target.value })}
+                  onChange={(v) => set({ skills: v })}
                   placeholder="战斗、生活技能、知识领域、社交特长……"
+                  inputClassName={areaCls}
                 />
               </div>
               <div>
-                <label className={labelCls}>不擅长</label>
-                <textarea
-                  className={areaCls}
+                <CapsuleField
+                  characterName={draft.name}
+                  label="不擅长"
+                  labelClassName={labelCls}
                   value={draft.ineptitudes ?? ''}
-                  onChange={(e) => set({ ineptitudes: e.target.value })}
+                  onChange={(v) => set({ ineptitudes: v })}
                   placeholder="软肋、不感兴趣、总做不好的事……"
+                  inputClassName={areaCls}
                 />
               </div>
             </div>

@@ -62,6 +62,7 @@ export interface CharacterData {
   quirks: string;
   backstory_milestones: BackstoryMilestone[];
   player_relation?: string;
+  drive?: string;
   skills?: string;
   ineptitudes?: string;
   sleepType?: 'night_owl' | 'normal';
@@ -118,6 +119,44 @@ export function installFetchAuth(): void {
     }
     return res;
   };
+}
+
+/**
+ * 图片 401 自愈：<img> 标签不走 fetch 拦截器，token 失效时图片静默裂图、无任何自愈。
+ * 全局捕获图片 error（capture 阶段——error 事件不冒泡），若图片来自 /uploads/，
+ * 则节流探测一次 /auth/me：token 失效时 installFetchAuth 的 401 处理会自动
+ * clearToken + onAuthFail（回登录页），与 fetch 请求的掉线行为对齐。
+ */
+let _lastImageProbeAt = 0;
+let _imageProbing = false;
+const IMAGE_PROBE_INTERVAL_MS = 30_000;
+
+export function installImageAuthRecovery(): void {
+  document.addEventListener(
+    'error',
+    (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLImageElement)) return;
+      const src = t.currentSrc || t.src || '';
+      if (!src.includes('/uploads/')) return;
+      _scheduleImageAuthProbe();
+    },
+    true, // capture：img 的 error 事件不冒泡，必须在捕获阶段监听
+  );
+}
+
+function _scheduleImageAuthProbe(): void {
+  const now = Date.now();
+  if (_imageProbing || now - _lastImageProbeAt < IMAGE_PROBE_INTERVAL_MS) return;
+  if (!getToken()) return; // 已登出：无需探测
+  _imageProbing = true;
+  _lastImageProbeAt = now;
+  // 探测认证状态：若 401，installFetchAuth 拦截器统一 clearToken + onAuthFail（回登录页）
+  fetch(`${API_BASE}/auth/me`)
+    .catch(() => {})
+    .finally(() => {
+      _imageProbing = false;
+    });
 }
 
 export async function request<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -415,6 +454,74 @@ export interface ScenarioInfo {
   updatedAt: number;
 }
 
+// ─── 位面任务系统类型（Plane Mission）──────────────────────
+
+export interface PlaneCharacter {
+  id: string;
+  name: string;
+  gender: string;
+  summary: string;   // 对外展示简介，不进聊天 prompt
+  persona: string;   // 对内人设，进聊天 prompt；空则复制 summary
+  greeting: string;  // 开场白，可空（空则引擎 roll）
+  avatar: string;
+  appearance: string; // 外貌描述，用于生成角色图/崽图（聊天背景）
+  goal: string;      // 剧情目标；空 = 默认好感度型（好感满 100 完成）
+  published: boolean;
+  playCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PlanePoolItem {
+  id: string;
+  name: string;
+  gender: string;
+  summary: string;
+  greeting: string; // 开场白（已展开胶囊），可空
+  avatar: string;
+  playCount: number;
+  goal: string;
+  goalPreview: string;
+  completed: boolean;
+}
+
+export interface PlaneSessionSummary {
+  sessionId: string;
+  planeCharacterId: string;
+  characterName: string;
+  avatar: string;
+  goal: string;
+  affection: number;
+  round: number;
+  ended: boolean;
+  goalAchieved: boolean;
+  updatedAt: number;
+}
+
+export interface PlaneSessionMessage {
+  id: string;
+  round_no: number;
+  role: string;
+  character_id: string | null;
+  character_name: string;
+  text: string;
+  quote: string | null;
+  internal: string;
+  internal_notable: number;
+}
+
+export interface PlaneSessionDetail {
+  sessionId: string;
+  planeCharacterId: string;
+  characterName: string;
+  avatar: string;
+  goal: string;
+  statsState: Record<string, number>;
+  round: number;
+  ended: boolean;
+  messages: PlaneSessionMessage[];
+}
+
 // ─── 生图可用性缓存 ─────────────────────────────────────
 let _imageGenEnabled: boolean | null = null;
 
@@ -457,7 +564,7 @@ export const api = {
   // 角色
   listMyCharacters: () => request<{ characters: MyCharacterSummary[] }>('/me/characters'),
   getCharacterEdit: (characterId: string) =>
-    request<{ characterData: CharacterData; hasFork: boolean; isPublic: boolean; publicData: CharacterData | null }>(
+    request<{ characterData: CharacterData; characterDataExpanded: CharacterData; hasFork: boolean; isPublic: boolean; publicData: CharacterData | null }>(
       `/characters/${characterId}/edit`
     ),
   forkCharacter: (characterId: string, characterData: CharacterData) =>
@@ -499,10 +606,10 @@ export const api = {
 
   // AI 生成图片（调 /ai-image/generate，prompt 传中文描述，返回 imagePath）
   // 头像：不传 opts（默认头像模式）；场景配图：传 { scene: true, appearance? }
-  generateImage: (prompt: string, opts: { scene?: boolean; appearance?: string; gender?: string; width?: number; height?: number } = {}) =>
+  generateImage: (prompt: string, opts: { scene?: boolean; portrait?: boolean; appearance?: string; gender?: string; width?: number; height?: number } = {}) =>
     request<{ imagePath: string }>('/ai-image/generate', {
       method: 'POST',
-      body: JSON.stringify({ prompt, width: opts.width ?? 1024, height: opts.height ?? 1024, scene: opts.scene, appearance: opts.appearance, gender: opts.gender }),
+      body: JSON.stringify({ prompt, width: opts.width ?? 1024, height: opts.height ?? 1024, scene: opts.scene, portrait: opts.portrait, appearance: opts.appearance, gender: opts.gender }),
     }),
 
   // 生图服务是否可用（health 接口返回，模块级缓存）
@@ -1007,6 +1114,122 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ background }),
     }),
+
+  // ─── 位面任务（Plane Mission）──────────────────────────
+  rollPlaneGreetings: (data: { name?: string; gender?: string; summary?: string; persona?: string }) =>
+    request<{ greetings: string[] }>('/plane/greetings/roll', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  fillPlaneFromText: (text: string) =>
+    request<{ name: string; gender: string; appearance: string; summary: string; persona: string; goal: string; greeting: string }>('/plane/fill', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+  polishPlaneField: (data: { field: string; text: string; name?: string; gender?: string }) =>
+    request<{ polished: string }>('/plane/polish', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  generatePlaneAppearance: (data: { name?: string; gender?: string; summary?: string; persona?: string }) =>
+    request<{ appearance: string }>('/plane/appearance', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  createPlaneCharacter: (data: { name: string; gender?: string; summary?: string; persona?: string; greeting?: string; avatar?: string; appearance?: string; goal?: string }) =>
+    request<{ character: PlaneCharacter }>('/plane/characters', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  listPlaneCharacters: (published?: boolean) =>
+    request<{ characters: PlaneCharacter[] }>(`/plane/characters${published ? '?published=1' : ''}`),
+  updatePlaneCharacter: (id: string, data: Partial<{ name: string; gender: string; summary: string; persona: string; greeting: string; avatar: string; appearance: string; goal: string }>) =>
+    request<{ character: PlaneCharacter }>(`/plane/characters/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deletePlaneCharacter: (id: string) =>
+    request<{ ok: boolean }>(`/plane/characters/${id}`, { method: 'DELETE' }),
+  publishPlaneCharacter: (id: string, published?: boolean) =>
+    request<{ published: boolean }>(`/plane/characters/${id}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(published === undefined ? {} : { published }),
+    }),
+  getPlanePool: (exclude?: string[]) =>
+    request<{ pool: PlanePoolItem[] }>(`/plane/pool${exclude && exclude.length ? `?exclude=${exclude.join(',')}` : ''}`),
+  createPlaneSession: (planeCharacterId: string) =>
+    request<{
+      sessionId: string;
+      planeCharacterId: string;
+      characterName: string;
+      statsState: Record<string, number>;
+      statsConfig: Array<{ name: string; initial: number; rules: string; target: number }>;
+      goal: string;
+      greeting: string;
+      round: number;
+    }>('/plane/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ planeCharacterId }),
+    }),
+  getPlaneSession: (sessionId: string) =>
+    request<PlaneSessionDetail>(`/plane/sessions/${sessionId}`),
+  planeAdvanceStream: (
+    sessionId: string,
+    message: string | undefined,
+    onBeat?: (b: { kind: string; speaker?: string; content: string; characterId?: string; internal?: string; internalNotable?: boolean }) => void,
+  ) =>
+    requestStream<{
+      sessionId: string;
+      round: number;
+      stats: Record<string, number>;
+      statsChanges: Array<{ name: string; before: number; after: number }>;
+      ambient: string[];
+      goalAchieved: boolean;
+      goalReason: string;
+      reward: number;
+      locationName: string;
+    }>(
+      `/plane/sessions/${sessionId}/advance`,
+      { method: 'POST', body: JSON.stringify({ message }) },
+      (evt) => {
+        if (evt.type === 'beat' && evt.beat) return onBeat?.(evt.beat);
+      },
+    ),
+  planeRetryStream: (
+    sessionId: string,
+    onBeat?: (b: { kind: string; speaker?: string; content: string; characterId?: string; internal?: string; internalNotable?: boolean }) => void,
+  ) =>
+    requestStream<{
+      sessionId: string;
+      round: number;
+      stats: Record<string, number>;
+      statsChanges: Array<{ name: string; before: number; after: number }>;
+      ambient: string[];
+      goalAchieved: boolean;
+      goalReason: string;
+      reward: number;
+      locationName: string;
+    }>(
+      `/plane/sessions/${sessionId}/retry`,
+      { method: 'POST', body: '{}' },
+      (evt) => {
+        if (evt.type === 'beat' && evt.beat) return onBeat?.(evt.beat);
+      },
+    ),
+  planeUndo: (sessionId: string) =>
+    request<{ ok: boolean; round: number }>(`/plane/sessions/${sessionId}/undo`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  endPlaneSession: (sessionId: string) =>
+    request<{ ended: boolean }>(`/plane/sessions/${sessionId}/end`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  deletePlaneSession: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/plane/sessions/${sessionId}`, { method: 'DELETE' }),
+  listPlaneSessions: (active?: boolean) =>
+    request<{ sessions: PlaneSessionSummary[] }>(`/plane/sessions${active ? '?active=1' : ''}`),
 };
 
 // ─── 回忆归档类型（日记页）──────────────────────────────

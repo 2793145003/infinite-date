@@ -12,12 +12,12 @@ export async function aiImageRoutes(app: FastifyInstance): Promise<void> {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
 
-    const { prompt, width, height, scene, appearance, gender } = req.body as { prompt?: string; width?: number; height?: number; scene?: boolean; appearance?: string; gender?: string };
+    const { prompt, width, height, scene, portrait, appearance, gender } = req.body as { prompt?: string; width?: number; height?: number; scene?: boolean; portrait?: boolean; appearance?: string; gender?: string };
     if (!prompt?.trim()) {
       return reply.code(400).send({ error: 'prompt 不能为空' });
     }
 
-    const result = await generateImage(playerId, prompt.trim(), { width, height, scene, appearance, gender });
+    const result = await generateImage(playerId, prompt.trim(), { width, height, scene, portrait, appearance, gender });
     if (!result.ok) {
       return reply.code(502).send({ error: result.error });
     }

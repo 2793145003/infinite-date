@@ -10,6 +10,7 @@
 
   "npc_mission_coop_reward": 20,
   "npc_mission_solo_reward": 5,
+  "plane_mission_reward": 30,
 
   "create_public_npc": 0,
   "create_private_npc": 0,

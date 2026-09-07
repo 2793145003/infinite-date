@@ -96,5 +96,8 @@ export function buildCharacterCard(playerId: string, characterId: string): strin
   if (d.goals) lines.push(`【目标】${d.goals}`);
   if (d.player_relation) lines.push(`【关系】${d.player_relation}`);
 
+  // 内驱力：系统从人设素材提炼的「主动找话题/推进」方向（可选字段；NSFW/病娇角色无此字段）
+  if (d.drive) lines.push(`【内驱力】${d.drive}`);
+
   return lines.join('\n');
 }

@@ -232,6 +232,18 @@ CREATE INDEX IF NOT EXISTS idx_novel_turns ON novel_turns(session_id, created_at
 
 - 角色「简单人设」的定位：不是完整角色卡，只是一两段话给 LLM 锚定性格和说话方式。随故事发展，角色的新变化靠「故事摘要」承接，不回写人设。
 
+### 世界状态与时间纪律（2026-09 新增）
+
+续写正文随时间推进，模型易「堆历史动作 / 编造时间 / 漏抽待办」，导致角色状态漂移。方案 = 世界状态抽取 + 时间纪律约束。
+
+**世界状态抽取（extractWorldState，填表法）**：预生成固定 JSON 骨架——名单 N 人 × 每人一个「正在做」`{where, what}` + 一个「待办」`{when, what}`，gemma 只往空里填字符串，不发明结构 / 人名。把当前时间（`novel_turns.time`，如「第 2 天·上午」）注入抽取 prompt：「正在做」不填 when（=当前时间），「待办」才填 when 且只认正文出现的未来时间词。根治自由生成 JSON 三大毛病：堆历史动作、when 编造、待办漏抽。
+
+**注入与降级（buildWorldStateText）**：世界状态文本注入续写 prompt；按环形时段距离 `(ti-ci+8)%8` 分级——相邻照写 / 当天跨 ≥2 段降级「稍后」/ 跨天保留「明天」锚。
+
+**时间纪律**：时段词序列 凌晨→清晨→上午→中午→午后→傍晚→夜晚→深夜（「下午」记作「午后」）。星落边界＝相邻时段跳 OK（中午→午后）、跨时段跳不行（清晨→午后）。纯 prompt 软约束拦不住跨段跳，关键是「玩家锚定」（玩家写主角段锚时间）——离线闭环须加 `--player-input` 模拟，否则误判方案无效。
+
+**关键教训**：① guidedJson 数组 schema 无法约束每人恰好一次（模型重复输出致超长截断），须用「命名字段 schema」——角色名做 object property，required 全员 + additionalProperties:false，才是真固定骨架。单测 `src/test/world-state.test.ts`。
+
 ---
 
 ## 九、Prompt 设计（已锁定）

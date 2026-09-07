@@ -12,6 +12,9 @@
 
 import { imageUrl, api } from './api';
 import butterflyWallpaperImg from '../assets/images/butterfly_ripple_wallpaper_1786953401075.jpg';
+import mistBlueWallpaperImg from '../assets/images/mist_blue_wallpaper.jpg';
+import deepBlueOceanWallpaperImg from '../assets/images/deep_blue_ocean_wallpaper.jpg';
+import starlitNightWallpaperImg from '../assets/images/starlit_night_wallpaper.jpg';
 
 export type ThemeId = 'dark-night' | 'warm-dusk' | 'deep-forest' | 'light-paper' | 'pure-white' | 'watercolor' | 'custom';
 
@@ -411,15 +414,15 @@ export const HOME_BG_PRESETS: HomeBgPreset[] = [
   },
   {
     id: 'mist-blue', name: '冰晶薄雾蓝', desc: '渐变蓝紫 · 冷调', light: false,
-    css: 'url("https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=800&q=80")',
+    css: `url(${mistBlueWallpaperImg})`,
   },
   {
     id: 'deep-blue-ocean', name: '深蓝海洋之境', desc: '碧蓝海水 · 通透', light: false,
-    css: 'url("https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=800&q=80")',
+    css: `url(${deepBlueOceanWallpaperImg})`,
   },
   {
     id: 'starlit-night', name: '星光梦境晚风', desc: '雪山星空 · 静谧', light: false,
-    css: 'url("https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=800&q=80")',
+    css: `url(${starlitNightWallpaperImg})`,
   },
 ];
 
@@ -433,9 +436,9 @@ export interface WallpaperPreset {
 
 export const V3_WALLPAPERS: WallpaperPreset[] = [
   { id: 'butterfly', name: '水畔蝶影 · 原画', url: butterflyWallpaperImg },
-  { id: 'mist-blue', name: '冰晶薄雾蓝', url: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=800&q=80' },
-  { id: 'deep-blue-ocean', name: '深蓝海洋之境', url: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=800&q=80' },
-  { id: 'starlit-night', name: '星光梦境晚风', url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=800&q=80' },
+  { id: 'mist-blue', name: '冰晶薄雾蓝', url: mistBlueWallpaperImg },
+  { id: 'deep-blue-ocean', name: '深蓝海洋之境', url: deepBlueOceanWallpaperImg },
+  { id: 'starlit-night', name: '星光梦境晚风', url: starlitNightWallpaperImg },
 ];
 
 /* === 地图页默认背景：随主题选一张预设壁纸 === */

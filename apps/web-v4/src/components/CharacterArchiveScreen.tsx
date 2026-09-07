@@ -1,7 +1,6 @@
 import React from 'react';
 import { ChevronLeft, Plus, Upload, Search, Edit3, MessageCircle, Check, Trash2, UserMinus, RotateCcw } from 'lucide-react';
 import { Character } from '../types';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 
 interface CharacterArchiveScreenProps {
   characters: Character[];
@@ -157,12 +156,16 @@ export const CharacterArchiveScreen: React.FC<CharacterArchiveScreenProps> = ({
               {/* Card Body: Left Monogram + Right Profile */}
               <div className="flex gap-3 items-start">
                 <div className="w-16 h-22 rounded-xl bg-bg-muted border border-border overflow-hidden flex items-center justify-center text-base font-bold text-ink shrink-0 group-hover:scale-[1.02] transition shadow-2xs">
-                  <img
-                    src={char.avatarUrl || getAnimeMaleAvatar(char.name || char.id)}
-                    alt={char.name}
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
+                  {char.avatarUrl ? (
+                    <img
+                      src={char.avatarUrl}
+                      alt={char.name}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span>{(char.name || '伴').slice(-1)}</span>
+                  )}
                 </div>
 
                 <div className="flex-1 min-w-0">

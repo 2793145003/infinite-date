@@ -345,7 +345,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      let reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
+      let reply_data = await generateReply(messages, { temperature: 0.75, maxTokens: 1024, playerId });
 
       // 短输入且NPC请求搜索记忆：检索后重新生成
       if (!isDeity) {
@@ -358,7 +358,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
           if (imagePath && enrichedMessages.length > 0) {
             enrichedMessages[enrichedMessages.length - 1]!.imagePath = imagePath;
           }
-          const enrichedReply = await generateReply(enrichedMessages, { temperature: 0.85, maxTokens: 1024, playerId });
+          const enrichedReply = await generateReply(enrichedMessages, { temperature: 0.75, maxTokens: 1024, playerId });
           reply_data = { ...enrichedReply, need_search: false, search_query: '' };
         }
       }
@@ -733,7 +733,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
+      const reply_data = await generateReply(messages, { temperature: 0.75, maxTokens: 1024, playerId });
 
       const finalReply = reply_data;
 
@@ -1017,7 +1017,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const messages = buildGroupMessages(systemPrompt, recentForPrompt, quotePrefix + textBody);
 
     try {
-      const groupReply = await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024, playerId });
+      const groupReply = await generateGroupReply(messages, charNames, { temperature: 0.75, maxTokens: 1024, playerId });
 
       // 存NPC消息
       const npcMsgIds: string[] = [];
@@ -1131,7 +1131,7 @@ async function generateGroupGreeting(
   ];
 
   try {
-    const reply = await generateGroupReply(messages, charNames, { temperature: 0.85, maxTokens: 1024, playerId });
+    const reply = await generateGroupReply(messages, charNames, { temperature: 0.75, maxTokens: 1024, playerId });
     return {
       messages: reply.messages,
       internals: reply.internals,
@@ -1241,7 +1241,7 @@ export async function generateGreeting(
   ];
 
   try {
-    return await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
+    return await generateReply(messages, { temperature: 0.75, maxTokens: 1024, playerId });
   } catch {
     return null;
   }

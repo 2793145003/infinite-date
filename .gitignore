@@ -9,6 +9,7 @@ dist/
 .env
 .env.*
 !.env.example
+idate_env.sh
 uploads/
 data/
 db-backups/

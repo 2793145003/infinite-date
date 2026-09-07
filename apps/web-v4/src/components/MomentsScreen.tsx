@@ -18,7 +18,6 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { Character, MomentPost, MomentComment } from '../types';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { api, type ApiMoment } from '../lib/api';
 import { ImageViewer } from './ImageViewer';
 
@@ -34,7 +33,6 @@ const INITIAL_MOMENT_POSTS: MomentPost[] = [
   {
     id: 'post-1',
     authorName: '屿白',
-    authorAvatar: getAnimeMaleAvatar('屿白'),
     content:
       '“人的眼泪总是向下坠落，要怎么仰望才能接住悲伤呢。” 无论何时回头，我都永远捧着你的脸。💫',
     location: '星光初遇咖啡馆',
@@ -67,7 +65,6 @@ const INITIAL_MOMENT_POSTS: MomentPost[] = [
   {
     id: 'post-2',
     authorName: '阿言',
-    authorAvatar: getAnimeMaleAvatar('阿言'),
     content:
       '偷拍一张在书房专注整理黑胶唱片的小狗。戴着同款降噪耳机，随手挑了一张唱片就说要单曲循环一整天~ 🎧💿',
     location: '私人视听黑胶馆',
@@ -94,7 +91,6 @@ const INITIAL_MOMENT_POSTS: MomentPost[] = [
   {
     id: 'post-3',
     authorName: '苏烬',
-    authorAvatar: getAnimeMaleAvatar('苏烬'),
     content:
       '夜班巡查结束。路过转角的面包房，新出炉的栗子欧包还冒着热气。带了一份回去，留给你明早当早餐。',
     location: '第四分区 · 街角烘焙坊',
@@ -408,9 +404,9 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 rounded-lg bg-solid text-solid-contrast flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden border border-border shadow-2xs">
-                        {authorChar ? (
+                        {authorChar?.avatarUrl ? (
                           <img
-                            src={authorChar.avatarUrl || getAnimeMaleAvatar(post.authorName)}
+                            src={authorChar.avatarUrl}
                             alt={post.authorName}
                             className="w-full h-full object-cover"
                             referrerPolicy="no-referrer"
@@ -546,9 +542,9 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
                         return (
                           <div key={comment.id} className="flex items-start gap-2 text-ink">
                             <div className="w-5 h-5 rounded-md overflow-hidden shrink-0 mt-0.5 border border-border bg-solid flex items-center justify-center text-[9px] font-bold text-solid-contrast">
-                              {cChar ? (
+                              {cChar?.avatarUrl ? (
                                 <img
-                                  src={cChar.avatarUrl || getAnimeMaleAvatar(comment.authorName)}
+                                  src={cChar.avatarUrl}
                                   alt={comment.authorName}
                                   className="w-full h-full object-cover"
                                   referrerPolicy="no-referrer"

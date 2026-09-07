@@ -37,6 +37,7 @@ import { sceneExploreRoutes } from './routes/scene-explore';
 import { sceneScenarioRoutes } from './routes/scene-scenario';
 import { novelRoutes } from './routes/novel';
 import { homePoemRoutes } from './routes/home-poem';
+import { planeRoutes } from './routes/plane';
 
 const app = Fastify({
   logger: {
@@ -87,6 +88,7 @@ async function start() {
       await sceneScenarioRoutes(api);
       await novelRoutes(api);
       await homePoemRoutes(api);
+      await planeRoutes(api);
 
       // 健康检查（前端连接监测用，无认证）
       api.get('/health', async () => ({ status: 'ok', timestamp: Date.now(), imageGenEnabled: Boolean(config.ideogramUrl) }));

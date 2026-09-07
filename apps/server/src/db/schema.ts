@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS text_messages (
   metadata       TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_text_messages_thread ON text_messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_text_messages_thread_created ON text_messages(thread_id, created_at);
 
 CREATE TABLE IF NOT EXISTS emails (
   id            TEXT PRIMARY KEY,
@@ -585,6 +586,7 @@ CREATE TABLE IF NOT EXISTS novel_sessions (
   excluded_chars TEXT NOT NULL DEFAULT '[]',       -- JSON 数组：被点暗（不参与剧情）的角色 id，默认空=全部参与
   story_overview TEXT NOT NULL DEFAULT '',         -- 故事进展总览（三折叠长期层；增量更新：旧总览 + 滑出中期的段摘要 → 新总览）
   overview_upto  INTEGER NOT NULL DEFAULT 0,       -- 总览已折进到第几段（display=1 序号），防重复折叠
+  world_state    TEXT NOT NULL DEFAULT '',         -- 世界状态快照 JSON（填表法抽取：每人「正在做」{where,what} + 「待办」{when,what}）
   created_at     INTEGER NOT NULL,
   updated_at     INTEGER NOT NULL
 );

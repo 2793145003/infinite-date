@@ -333,6 +333,7 @@ export function formatCharacterCard(char: CharacterData): string {
     preferences: formatPreferences(char),
     backstory_milestones: formatBackstoryMilestones(char),
     player_relation: char.player_relation || '无预设关系',
+    drive: char.drive ? `\n\n【内驱力】\n${char.drive}` : '',
     skills: formatSkills(char),
   });
 }

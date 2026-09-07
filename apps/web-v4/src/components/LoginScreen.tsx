@@ -64,7 +64,7 @@ export const LoginScreen: React.FC<{
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center px-8 text-center"
+      className="min-h-dvh flex flex-col items-center justify-center px-8 text-center"
       style={{
         background:
           'radial-gradient(600px 400px at 50% 30%, var(--color-boot-glow), transparent 70%), var(--color-boot-bg)',

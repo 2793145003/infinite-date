@@ -45,7 +45,7 @@ infinite-date-v2/
 │           ├── index.css         # @theme zinc→blue 映射 + bg-ripple-pattern（蝴蝶水彩壁纸）
 │           ├── types.ts          # 类型定义
 │           ├── data/             # mockData.ts（假数据）+ animeAvatars.ts
-│           └── components/       # 42 个页面/弹窗组件（HomeScreen/SceneConversationScreen/角色档案/朋友圈等）+ admin/
+│           └── components/       # 50 个页面/弹窗组件（HomeScreen/SceneConversationScreen/位面任务 PlaneApp/互动小说/朋友圈等）+ admin/
 ├── packages/
 │   └── shared/              # 前后端共享类型（CharacterData / DEITY_ID 等）
 └── docs/                    # 文档（设计文档 + 变更记录）
@@ -73,7 +73,8 @@ infinite-date-v2/
 | `moment-scheduler.ts` | 46 | **后台行程驱动**。5min 扫一次，不依赖玩家在线 | `startMomentScheduler` |
 | `proactive.ts` | 414 | **NPC主动消息**。意愿累积机制（sms_urge/moment_urge）+ 行程变更检测 | `checkScheduleChange`, `resetSmsUrge`, `resetMomentUrge`, `clearUrgeAfterDate`, `initUrge`, `getUnansweredProactiveCount` |
 | `presence.ts` | 257 | **玩家在线状态 + 旧系统NPC主动消息**。15s 心跳 | `updatePresence`, `checkProactive` |
-| `character.ts` | 114 | 角色数据加载（fork 优先级：玩家fork > 公共模板 > 私有） | `loadCharacterData`, `getCharacterName`, `safeAvatar` |
+| `character.ts` | 156 | 角色数据加载（fork 优先级：玩家fork > 公共模板 > 私有）+ 胶囊展开。loadCharacterDataRaw 直读原文（编辑/创建用）/ loadCharacterData 展开（运行态注入）| `loadCharacterDataRaw`, `loadCharacterData`, `expandCapsules`, `getPlayerName`, `getCharacterName`, `safeAvatar` |
+| `drive.ts` | 72 | 角色内驱力（drive）提取。玩家可填可生成，没填才 auto-extract（纯规则提炼角色卡）| `extractDrive` |
 | `character-card.ts` | 100 | 角色卡构建（精选字段，信息密度优先） | `buildCharacterCard` |
 | `conversation-helpers.ts` | 245 | 旧系统对话操作（undo/retry/保存回复/搜索增强） | `undoLastPlayerMessage`, `saveNpcReply`, `maybeRetrieveSearchResults` |
 | `permission.ts` | 81 | 权限系统（创建NPC/地点/撤回/独白窥探） | `spendPlayerPermission`, `grantPlayerPermission`, `getPlayerBalance` |
@@ -96,6 +97,9 @@ infinite-date-v2/
 | `npc-task.ts` | 184 | **NPC 任务邀请触发**。checkNpcTaskInvite / sweepSoloMissions 挂 moment-scheduler 5min tick；好友+空档段+主城+当日未发过才触发 | `checkNpcTaskInvite`, `sweepSoloMissions` |
 | `npc-mission.ts` | 226 | **NPC 任务构建**。基于角色特长生成温馨向任务（LLM） | `buildNpcMission` |
 | `cozy-worldgen.ts` | 91 | **温馨向世界生成**。卦象温馨层（八卦池/目标池/温馨向卦象渲染），NPC 任务/世界任务温馨向共用 | `cozyHexLayer`, `renderBaguaXiangLayer`, `cozyGoalGuide` |
+| `plane-schema.ts` | 31 | **位面任务建表 SQL**（plane_characters 一张主表；会话/消息复用 scene_sessions/scene_messages，scene_type='plane' + plane_character_id 列）。纯 SQL 常量，不 import db | `PLANE_SCHEMA_SQL` |
+| `plane-wiring.ts` | 85 | **位面崽身份读取层**。从 plane_characters 读名字/角色卡，供 scene-wiring 的 scene_type='plane' 分支注入（替代 getCharacterName/buildCharacterCard）。summary 对外不进 prompt，persona 对内进 prompt（空则复制 summary） | `getPlaneCharacter`, `getPlaneCharacterName`, `normalizePlaneTokens`, `expandPlaneText`, `buildPlaneCharacterCard` |
+| `plane-playcount.ts` | 28 | **位面委托次数（play_count）计数**。玩家真正说过话才计一次，每会话只计一次；纯函数便于离线单测（不 import db） | `bumpPlanePlayCountIfFirstTalk` |
 | `util.ts` | 20 | 通用工具 | `genId`, `now`, `jsonParse` |
 
 ---
@@ -218,6 +222,29 @@ infinite-date-v2/
 | | POST | `/novel/session/:sessionId/retract` | 撤回末段 |
 | | POST | `/novel/session/:sessionId/end` | 写结尾（ended，可另开新局） |
 
+### 位面任务系统（plane，替代旧世界任务/NPC任务）
+
+| 文件 | Method | Path | 功能 |
+|---|---|---|---|
+| **plane.ts** | GET | `/plane/pool` | 任务大厅公开池卡片流（swipe 参数刷下一张） |
+| | POST | `/plane/characters` | 建位面崽（name/summary/persona/greeting/avatar/goal） |
+| | GET | `/plane/characters` | 位面崽列表（mine=1 我的） |
+| | PATCH | `/plane/characters/:id` | 编辑位面崽 |
+| | DELETE | `/plane/characters/:id` | 删除位面崽 |
+| | POST | `/plane/characters/:id/publish` | 发布进公共池 |
+| | POST | `/plane/greetings/roll` | roll 开场白 |
+| | POST | `/plane/appearance` | 生成外貌 |
+| | POST | `/plane/fill` | 一键填充人设 |
+| | POST | `/plane/polish` | 润色人设 |
+| | POST | `/plane/sessions` | 进崽开会话（快照 goal） |
+| | POST | `/plane/sessions/:sessionId/advance` | 推进一轮（SSE，复用场景引擎） |
+| | POST | `/plane/sessions/:sessionId/retry` | 重试上一轮 |
+| | POST | `/plane/sessions/:sessionId/undo` | 撤回 |
+| | POST | `/plane/sessions/:sessionId/end` | 结束（判完成发权限，重玩不发） |
+| | DELETE | `/plane/sessions/:sessionId` | 删除会话 |
+| | GET | `/plane/sessions/:sessionId` | 读会话 |
+| | GET | `/plane/sessions` | 会话列表（进行中 + 历史） |
+
 ### 其他
 
 | 文件 | Method | Path | 功能 |
@@ -235,13 +262,13 @@ infinite-date-v2/
 | | POST | `/moments` | 发朋友圈 |
 | | POST | `/moments/:mid/comment` | 评论 |
 | | POST | `/moments/:mid/like` | 点赞 |
-| **mission.ts** | POST | `/missions/divine` | 摇卦起卦（纳甲筮法，种子=玩家+时辰+序号） |
-| | POST | `/missions/generate` | 生成世界任务（卦象驱动 worldgen） |
-| | GET | `/missions` | 任务列表 |
-| | POST | `/missions/:mid/accept` | 接任务（选同行 NPC） |
-| | POST | `/missions/:mid/decline` | 拒绝任务 |
-| | GET | `/missions/friends` | 可同行好友列表 |
-| | POST | `/missions/end` | 结束任务（评级发权限） |
+| **mission.ts** | POST | `/missions/divine` | ⛔ 摇卦起卦（返回 disabled，卦象纯函数保留待用） |
+| | POST | `/missions/generate` | ⛔ 生成世界任务（返回 disabled） |
+| | GET | `/missions` | 任务列表（只读历史） |
+| | POST | `/missions/:mid/accept` | ⛔ 接任务（返回 disabled） |
+| | POST | `/missions/:mid/decline` | ⛔ 拒绝任务（返回 disabled） |
+| | GET | `/missions/friends` | 可同行好友列表（只读） |
+| | POST | `/missions/end` | ⛔ 结束任务（返回 disabled） |
 | **creation.ts** | POST | `/creation/start` | 角色创建对话 |
 | | POST | `/creation/:sid/chat` | 创建中对话 |
 | | POST | `/creation/:sid/finalize` | 完成创建 |
@@ -368,6 +395,7 @@ infinite-date-v2/
 | `lib/themes.ts` | 556 | 主题（皮肤整套变量生成 + 主页背景预设/上传） |
 | `lib/sceneMapGeometry.ts` | 820 | 地图几何（Voronoi 分层分割） |
 | `lib/text-render.tsx` | 36 | 文本渲染（@提及） |
+| `lib/plane-chat-utils.tsx` | 74 | 位面聊天共享工具（气泡类型/消息行映射/动作标记渲染/延时） |
 | `data/mockData.ts` | 627 | 假数据 |
 | `data/animeAvatars.ts` | 45 | 动画头像 |
 | `utils/audio.ts` | 226 | 音频 |
@@ -385,7 +413,6 @@ infinite-date-v2/
 | `SmsScreen.tsx` | 722 | 短信（聊天，主对话入口） |
 | `SceneConversationScreen.tsx` | 930 | **场景约会对话**（SSE 气泡 + 心声 + 软键盘适配 kbH + 连续气泡头像留空） |
 | `MapDatingModal.tsx` | 185 | 地图约会弹窗 |
-| `VideoCallScreen.tsx` | 479 | 视频通话 |
 | `SceneMapScreen.tsx` | 463 | 图形地图（Voronoi 分层） |
 | `SceneLocationDetail.tsx` | 482 | 地点详情 |
 | `SceneExploreScreen.tsx` | 351 | 场景探索（逛逛/偶遇/上前） |
@@ -423,9 +450,12 @@ infinite-date-v2/
 | `NovelList.tsx` | 147 | 互动小说列表（我的/公开页签） |
 | `NovelEditor.tsx` | 719 | 互动小说创建/编辑（设定+开场+角色名单+roll） |
 | `NovelPlay.tsx` | 462 | 互动小说写作/阅读页（接力写+润色开关+出场名单+撤回） |
+| `PlaneApp.tsx` | 1792 | **位面任务主应用**（三页签：任务大厅 swipe 卡片流 / 任务列表 / 我的角色建卡+发布；大厅快聊复用场景对话 UI + 角色图背景） |
+| `ExperimentalApp.tsx` | 40 | 实验功能列表页（互动小说 / 位面任务入口，从设置-实验功能进入） |
 | `BackgroundPicker.tsx` | 243 | 主页壁纸选择（上传/生成，9:16 竖图） |
 | `ImageViewer.tsx` | 161 | 全屏图片查看器（点图放大+双指缩放） |
-| `PlayerChipInput.tsx` | 141 | 玩家占位符输入（{{player_name}} 按钮，显示【玩家】） |
+| `PlayerChipInput.tsx` | 160 | 双胶囊 chip 输入（{{character_name}} 角色名 / {{player_name}} 玩家）。角色名 chip 显示真实名（characterName prop，空兜底「角色名」）|
+| `CapsuleField.tsx` | 70 | 人设叙述字段封装（label + 角色名/玩家两胶囊按钮，调 insertToken 插占位符）|
 
 ### components/admin/
 
@@ -444,6 +474,7 @@ infinite-date-v2/
 | 文件 | 行数 | 用途 | 调用方 |
 |---|---|---|---|
 | `scene.actor.txt` | 65 | **场景引擎演员**（点名版，核心）。含【不重复】原则 | run-scene-turn.ts runActor |
+| `scene.actor.ab.txt` | 75 | 场景演员 AB 版（drive 内驱力注入实验）| AB 实验脚本 |
 | `scene.namer.txt` | 15 | **点名版选人**（生产默认） | run-scene-turn.ts pickNextSpeaker |
 | `scene.namer.v2.txt` | 9 | 点名版选人 v2（AB 实验备选，经 templates.namer 覆盖启用） | run-scene-turn.ts |
 | `scene.namer.v1.bak.txt` | 9 | v1 备份（不参与生产） | — |
@@ -471,6 +502,7 @@ infinite-date-v2/
 | `novel.summary.txt` | 13 | 段摘要（保留悬念/线索 + 时间地点） | routes/novel.ts |
 | `novel.overview.txt` | 16 | 故事总览增量更新 | routes/novel.ts |
 | `novel.import.txt` | 22 | 导入约会角色为小说角色（转简单人设） | routes/novel.ts |
+| `novel.world-state.txt` | 21 | **世界状态抽取**（填表法：固定 JSON 骨架，gemma 只填空）。单测 src/test/world-state.test.ts | routes/novel.ts extractWorldState |
 
 > **改任何 .txt 后需重启后端**（loadPrompt 有 Map 缓存）。
 
@@ -595,6 +627,7 @@ moment-scheduler.ts (5min tick)
 | | `permissions` / `invite_codes` | 权限/邀请 |
 | | `player_llm_configs` | per-player LLM 配置（base_url/api_key/model，未填回落 env） |
 | **互动小说** | `novels` / `novel_characters` / `novel_sessions` / `novel_turns` | 共写引擎（小说/简单人设角色/故事线多周目/段落）。完全隔离于约会体系，不进 characters/行程/朋友圈 |
+| **位面任务** | `plane_characters` | 位面崽（UGC 公共池，独立数据模型）。会话/消息复用 scene_sessions/scene_messages（scene_type='plane' + plane_character_id 列） |
 
 ---
 
@@ -636,8 +669,9 @@ moment-scheduler.ts (5min tick)
 | **UNIMPLEMENTED_FEATURES.md** | 未实现功能清单 |
 | **MIGRATION_DESIGN.md** | v3→v2 迁移设计（新表逐步替代旧表） |
 | **MISSION_DESIGN.md** | 任务系统设计 |
-| **HEXAGRAM_MISSION_DESIGN.md** | 卦象任务设计 |
-| **NPC_TASK_DESIGN.md** / **NPC_TASK_IMPL.md** | NPC 任务设计 / 实现 |
+| **HEXAGRAM_MISSION_DESIGN.md** | 卦象任务设计（世界任务已下线，位面任务替代） |
+| **PLANE_MISSION_DESIGN.md** | 位面任务系统设计（已上线） |
+| **NPC_TASK_DESIGN.md** / **NPC_TASK_IMPL.md** | NPC 任务设计 / 实现（入口已下线） |
 | **GROUP_CHAT_DESIGN.md** | 群聊设计 |
 | **MEDIA_BACKGROUND_DESIGN.md** | 媒体/背景图系统 |
 | **MAP_VIZ_DESIGN.md** | 地图可视化设计 |

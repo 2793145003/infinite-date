@@ -22,6 +22,7 @@ import {
   SceneBeat,
 } from './run-scene-turn';
 import { getCharacterName } from './character';
+import { getPlaneCharacter, getPlaneCharacterName, buildPlaneCharacterCard, expandPlaneText } from './plane-wiring';
 import { overrideSceneScheduleToLocation } from './schedule';
 
 /**
@@ -243,6 +244,9 @@ function buildSceneContext(session: any): SceneContext {
   // ── 剧本模式：不依赖 scene_locations，用世界观描述驱动 ──
   if (session.scene_type === 'scenario') {
     return buildScenarioSceneContext(session);
+  }
+  if (session.scene_type === 'plane') {
+    return buildPlaneSceneContext(session);
   }
   ensureSceneMap();
   // 地点：优先用 move 后的 current_location_id，回退到起始 root_location_id
@@ -486,6 +490,64 @@ function buildScenarioSceneContext(session: any): SceneContext {
 }
 
 /**
+ * 位面模式上下文：不依赖 scene_locations / scene_relationships / scene_homes，
+ * 从 plane_characters 读名字/人设/对外简介驱动。scene_type='plane' 时调用。
+ */
+function buildPlaneSceneContext(session: any): SceneContext {
+  const planeChar = getPlaneCharacter(session.plane_character_id);
+  const name = planeChar?.name ?? '崽';
+  const companions = `${name}（角色）`;
+
+  const playerName = (db.prepare('SELECT name FROM players WHERE id = ?').get(session.player_id) as any)?.name || '玩家';
+  const summary = expandPlaneText(planeChar?.summary || '', name, playerName);
+  const goal = expandPlaneText(session.goal || planeChar?.goal || '', name, playerName);
+
+  // tone：对外简介当初见氛围；空则温馨放松
+  const tone = summary ? `你与对方的初见：${summary}` : '温馨放松的初遇';
+
+  // rules：任务目标 + 动描规则
+  const rulesParts: string[] = [];
+  if (goal) rulesParts.push(`任务目标：${goal}`);
+  rulesParts.push('注意保持角色人设，每条回复都要有身体语言。');
+  const rules = rulesParts.join('\n');
+
+  // 关系/玩家视角描述：summary 当第一印象 + 外貌（位面崽独立，不查 scene_relationships）
+  const sceneRelations = `${name} 是本次位面委托中遇到的人。`;
+  const appearance = expandPlaneText(planeChar?.appearance || '', name, playerName);
+  const playerDescriptions = `${name}：${[summary || '刚认识的人', appearance ? `外貌：${appearance}` : ''].filter(Boolean).join('；')}`;
+
+  // 历史对话（同剧本逻辑，但 NPC 名一律用位面崽名，避免 getCharacterName 查不到主城卡）
+  const convRowsRaw = db.prepare(
+    'SELECT role, character_name, character_id, text FROM scene_messages WHERE scene_session_id = ? ORDER BY round_no DESC, created_at DESC LIMIT ?'
+  ).all(session.id, CONVERSATION_WINDOW) as any[];
+  const hasPlayerSpoken = !!convRowsRaw.find((r) => r.role === 'player');
+  const convRows = convRowsRaw.reverse();
+  const conversationSoFar = convRows
+    .map((r) => {
+      if (r.role === 'narration') return `（旁白）${r.text}`;
+      if (r.role === 'player') return `${r.character_name}：${r.text}`;
+      return `${name}：${r.text}`;
+    })
+    .join('\n');
+
+  return {
+    location: '',
+    locationName: '',
+    locationDesc: summary,
+    tone,
+    rules,
+    companions,
+    companionsRaw: companions,
+    residentNpcs: '',       // 位面无地点路人
+    sceneRelations,
+    playerDescriptions,
+    conversationSoFar,
+    hasPlayerSpoken,
+    availableLocations: '',  // 位面禁用 move
+  };
+}
+
+/**
  * 计算距离场景上一次互动的时长（人类可读）。用于让导演/演员感知"时间流逝、时段/天色已变"，
  * 避免被开场时刻（如凌晨 greeting）的语境带偏成"还以为是清晨"。
  * 无明显间隔（<30 分钟）返回空串（交给导演别强调时间）。
@@ -566,7 +628,10 @@ export async function advanceScene(
   const sceneCtx = buildSceneContext(session);
 
   // 3) 组装 actors
-  const characterIds = jsonParse<string[]>(session.character_ids, []);
+  const isPlane = session.scene_type === 'plane';
+  const characterIds = isPlane
+    ? (session.plane_character_id ? [session.plane_character_id] : [])
+    : jsonParse<string[]>(session.character_ids, []);
   if (!characterIds.length) throw new Error('场景没有参与者');
 
   // 收集热窗（最近几轮原文）供 buildActorMemories —— 简化：用历史对话
@@ -577,7 +642,7 @@ export async function advanceScene(
   const actorsBase: Record<string, { character_id: string; hotWindowRounds: TurnLine[][] }> = {};
   const actorOrder: SceneActorSource[] = [];
   for (const cid of characterIds) {
-    const name = getCharacterName(cid);
+    const name = isPlane ? getPlaneCharacterName(cid) : getCharacterName(cid);
     const key = name;
     actorsBase[key] = {
       character_id: cid,
@@ -598,7 +663,7 @@ export async function advanceScene(
   // 主角（character_ids）不受此影响，始终跟着玩家。
   // 剧本模式无地点概念，跳过路人。
   const isScenario = session.scene_type === 'scenario';
-  const rNpcs = isScenario ? [] : (session.scene_type === 'mission'
+  const rNpcs = (isScenario || isPlane) ? [] : (session.scene_type === 'mission'
     ? filterNpcsByPlace(getNpcs(session.root_location_id || session.current_location_id || ''), session.current_location_id)  // 任务场景：世界 NPC 挂根地点，按常在地点 place 过滤——只有人在当前地点才在场
     : getNpcs(session.current_location_id || session.root_location_id));
   for (const n of rNpcs) {
@@ -681,17 +746,19 @@ export async function advanceScene(
           ? `【角色】${npc.name}\n【你是什么人】${npc.persona}${npc.role ? `\n【你的处境】${npc.role}` : ''}${npc.place ? `\n【你此刻人在】${npc.place}` : ''}${npc.clues?.length ? `\n【你心里知道的事】${npc.clues.join('；')}\n（这是你藏着、但不轻易全说的事：对方问到了、或话题自然触及了，你才淡淡透露一点；不要一上来就全盘托出，也不要死咬不说。）` : ''}`
           // 约会场景路人：常驻者，自然接话打圆场
           : `【角色】${npc.name}（本地的常驻人物）\n【人设/职责】${npc.persona}\n（你是这里的常驻者，平时在玩家和主角身边自然活动，接话、引话题、打圆场都自然）${npc.clues?.length ? `\n【你心里知道的事】${npc.clues.join('；')}\n（这是你藏着、但不轻易全说的事：对方问到了、或话题自然触及了，你才淡淡透露一点；不要一上来就全盘托出，也不要死咬不说。）` : ''}`)
-        : buildCharacterCard(playerId, a.characterId),
+        : (isPlane ? buildPlaneCharacterCard(a.characterId, playerName) : buildCharacterCard(playerId, a.characterId)),
       player_profile: profile,
       player_description: npc
         ? '常驻在此的熟面孔'
-        : (() => {
-            const rel = db.prepare(
-              'SELECT player_description, current_activity FROM scene_relationships WHERE player_id = ? AND character_id = ? ORDER BY updated_at DESC LIMIT 1'
-            ).get(playerId, a.characterId) as any;
-            actorCurrentActivity = rel?.current_activity ?? '';
-            return rel?.player_description ?? '刚认识的陌生人';
-          })(),
+        : isPlane
+          ? (() => { const pc = getPlaneCharacter(a.characterId); return pc?.summary ? expandPlaneText(pc.summary, pc.name, playerName) : '刚认识的人'; })()
+          : (() => {
+              const rel = db.prepare(
+                'SELECT player_description, current_activity FROM scene_relationships WHERE player_id = ? AND character_id = ? ORDER BY updated_at DESC LIMIT 1'
+              ).get(playerId, a.characterId) as any;
+              actorCurrentActivity = rel?.current_activity ?? '';
+              return rel?.player_description ?? '刚认识的陌生人';
+            })(),
       current_activity: npc ? '' : actorCurrentActivity,
       chronicle_summary: mems[a.key]?.chronicle_summary ?? '',
       retrieved_memories: mems[a.key]?.retrieved_memories ?? '',
@@ -738,6 +805,7 @@ export async function advanceScene(
       scene_memory,
       time_elapsed: computeTimeElapsed(sessionId, Date.now()),
       environmental_clues: readMissionMeta(sessionId).environmentalClues || undefined,
+      suppress_narration: isPlane,
     },
     actors,
     stats_config: jsonParse(session.stats_config ?? '[]', []),
@@ -873,7 +941,7 @@ export async function advanceScene(
   let newLocationName = '';
   let moveBeats: any[] = [];
 
-  if (!isScenario) {
+  if (!isScenario && !isPlane) {
     newLocationId = session.current_location_id || session.root_location_id;
     // 找出本轮所有 move 拍（多个时取最后一个为目标）
     moveBeats = result.beats.filter((b) => b.kind === 'action' && b.type === 'move' && b.to);
@@ -990,7 +1058,8 @@ export async function advanceScene(
   for (const item of result.output) {
     if (item.kind === 'character' && item.playerDescription) {
       const actor = actorOrder.find((a) => a.key === item.speaker);
-      if (actor && !npcById.has(actor.characterId)) {
+      // 位面崽不写 scene_relationships（不占 characters 表，跨场不延续）
+      if (actor && !npcById.has(actor.characterId) && !isPlane) {
         db.prepare(
           `INSERT INTO scene_relationships (id, player_id, character_id, scene_session_id, player_description, current_activity, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)

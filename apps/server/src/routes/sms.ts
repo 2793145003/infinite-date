@@ -51,8 +51,8 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
 
       if (t.character_id !== DEITY_ID) {
         name = getCharacterName(t.character_id);
-        avatar = getCharacterAvatar(playerId, t.character_id) || null;
         const charData = loadCharacterData(playerId, t.character_id);
+        avatar = getCharacterAvatar(playerId, t.character_id, charData) || null;
         if (charData) {
           onlineState = getNpcOnlineState(playerId, t.character_id, charData as unknown as Record<string, any>, now());
           gender = charData.gender ?? null;

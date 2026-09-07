@@ -48,7 +48,7 @@ interface StatsConfigItem {
  * 破案玩法（mission + 有进度）：进度 = 累计已揭示线索数，天然封顶，不信任 LLM delta。
  * 其他玩法：按 LLM delta，clamp 到 [0, target] 防超（治「进度 120 > 100」类问题）。
  */
-function applyStatsChanges(
+export function applyStatsChanges(
   sessionId: string,
   sceneType: string,
   statsConfig: StatsConfigItem[],
@@ -541,7 +541,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     const raw = reply.raw;
     raw.setHeader('Content-Type', 'text/event-stream');
     raw.setHeader('Cache-Control', 'no-cache');
-    raw.setHeader('Connection', 'keep-alive');
+    raw.setHeader('Connection', 'close');
     reply.hijack();
 
     const send = (data: unknown) => {
@@ -638,7 +638,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     const raw = reply.raw;
     raw.setHeader('Content-Type', 'text/event-stream');
     raw.setHeader('Cache-Control', 'no-cache');
-    raw.setHeader('Connection', 'keep-alive');
+    raw.setHeader('Connection', 'close');
     reply.hijack();
 
     const send = (data: unknown) => {
@@ -722,7 +722,7 @@ export async function sceneScenarioRoutes(app: FastifyInstance): Promise<void> {
     const raw = reply.raw;
     raw.setHeader('Content-Type', 'text/event-stream');
     raw.setHeader('Cache-Control', 'no-cache');
-    raw.setHeader('Connection', 'keep-alive');
+    raw.setHeader('Connection', 'close');
     reply.hijack();
 
     const send = (data: unknown) => {

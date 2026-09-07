@@ -51,7 +51,7 @@ export async function sceneNamedRoutes(app: FastifyInstance): Promise<void> {
     const raw = reply.raw;
     raw.setHeader('Content-Type', 'text/event-stream');
     raw.setHeader('Cache-Control', 'no-cache');
-    raw.setHeader('Connection', 'keep-alive');
+    raw.setHeader('Connection', 'close');
     reply.hijack();
 
     const send = (data: unknown) => {
@@ -102,7 +102,7 @@ export async function sceneNamedRoutes(app: FastifyInstance): Promise<void> {
     const raw = reply.raw;
     raw.setHeader('Content-Type', 'text/event-stream');
     raw.setHeader('Cache-Control', 'no-cache');
-    raw.setHeader('Connection', 'keep-alive');
+    raw.setHeader('Connection', 'close');
     reply.hijack();
 
     const send = (data: unknown) => {
@@ -170,7 +170,7 @@ export async function sceneNamedRoutes(app: FastifyInstance): Promise<void> {
       const raw = reply.raw;
       raw.setHeader('Content-Type', 'text/event-stream');
       raw.setHeader('Cache-Control', 'no-cache');
-      raw.setHeader('Connection', 'keep-alive');
+      raw.setHeader('Connection', 'close');
       reply.hijack();
       hijacked = true;
       const send = (data: unknown) => { try { raw.write(`data: ${JSON.stringify(data)}\n\n`); } catch { /* 断连 */ } };

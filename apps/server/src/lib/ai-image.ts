@@ -41,6 +41,18 @@ const SCENE_PROMPT_SYSTEM =
   'has_person 表示画面里是否出现了人物（含身体局部）；' +
   'has_face 表示画面里是否出现了脸部/面孔（只拍身体局部如腹肌、背肌、腿、手、背影时 has_person=true 但 has_face=false）。不要输出其它文字。';
 
+// 立绘：gemma 转写中文外貌为英文半身立绘描述（含场景背景 + 自然姿态，避免证件照）。
+const PORTRAIT_PROMPT_SYSTEM =
+  '你是角色立绘转写助手。把中文角色人设转写成一段英文画面描述，用于文生图模型生成该角色的半身立绘。' +
+  '规则：输出分三块——' +
+  '外观：性别、发色发型、瞳色眼型、脸型五官、皮肤、服装、气质，忠实还原人设，不自行添加设定；五官要具体刻画（眼型、眉形、睫毛、鼻形、唇形、脸型轮廓），禁止用 soft facial features 这类笼统描述；' +
+  '背景：按角色气质补全一个具体场景（室内/街景/夜景/花园/校园等），要具体可感，不要纯色或空白背景；' +
+  '姿态：根据角色气质自拟一个自然的上半身动作（托腮、抱臂、整理衣领、把玩发梢、轻触饰物等，可自拟其他贴合动作），不要呆立正面的证件照构图，也不要转身回头/回眸；' +
+  '按给定性别锚定称呼开头（男 = male，女 = female），年龄与形象完全由外貌描述决定、不预设 handsome/young/beautiful 等形容词；未给性别时不写死性别、按人设自身判断；' +
+  '人设信息不足时，只补全外观必需的通用描述，不要杜撰具体特征；' +
+  '头发长度等视觉关键信息要具体（shoulder-length / chin-length / waist-length），不用含糊的 medium-length；' +
+  '输出单段英文，逗号分隔，不加引号不加解释。';
+
 // 场景转写 JSON 约束（guidedJson 输出 prompt + has_person）
 const SCENE_EXPAND_SCHEMA = {
   type: 'object',
@@ -69,6 +81,14 @@ const SCENE_STYLE_SUFFIX =
 const SCENE_FACE_QUALITY =
   'elegant refined face, detailed expressive eyes, aegyo sal under eyes, glossy lips, smooth porcelain skin';
 
+// 立绘：上半身 + 动态姿态 + 场景背景（角色本人 + 精致脸 + 冷色调，同源半写实插画）。
+const PORTRAIT_STYLE_SUFFIX =
+  'masterpiece, top-tier quality, waist-up shot, dynamic natural pose, detailed scenic background, ' +
+  'semi-realistic anime illustration, delicate soft lighting, ' +
+  'elegant refined face, intricate facial details, delicate eyelashes, refined nose, defined facial contours, ' +
+  'aegyo sal under eyes, glossy lips, smooth porcelain skin, soft shading, ' +
+  'cold muted color palette, detailed expressive eyes, premium otome game card CG';
+
 interface SceneExpandResult {
   prompt: string;
   hasPerson: boolean;
@@ -88,6 +108,27 @@ async function gemmaExpandAvatar(prompt: string, gender?: string): Promise<strin
   ];
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await chat(messages, { temperature: 0.7, maxTokens: 512, callType: 'krea2-prompt-expand' });
+    if (res.truncated) continue;
+    const out = res.content.trim();
+    if (!out) continue;
+    return out;
+  }
+  return null;
+}
+
+/**
+ * 立绘扩写：中文外貌 → 英文全身立绘描述（单段自然语言）。
+ * 与头像扩写同构，但 system 强调全身服装；失败重试一次，仍失败返回 null。
+ */
+async function gemmaExpandPortrait(prompt: string, gender?: string): Promise<string | null> {
+  const genderText = gender === 'female' ? '女' : gender === 'male' ? '男' : '';
+  const userContent = genderText ? `性别：${genderText}\n外貌：${prompt}` : prompt;
+  const messages: ChatMessage[] = [
+    { role: 'system', content: PORTRAIT_PROMPT_SYSTEM },
+    { role: 'user', content: userContent },
+  ];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await chat(messages, { temperature: 0.7, maxTokens: 768, callType: 'krea2-prompt-expand' });
     if (res.truncated) continue;
     const out = res.content.trim();
     if (!out) continue;
@@ -169,6 +210,8 @@ export interface GenerateImageOptions {
   seed?: number;
   /** 场景配图模式（短信/朋友圈/背景图）。不设 = 头像模式（外观转写 + 半身像）。 */
   scene?: boolean;
+  /** 竖屏角色立绘模式（崽图/聊天背景全身立绘）。与 scene 互斥，优先于 scene。 */
+  portrait?: boolean;
   /** 角色外貌（scene 模式用，画面出现角色本人时锚定外貌）。 */
   appearance?: string;
   /** 性别 'male'|'female'（头像模式锚定称呼；scene 模式出人时锚定称呼，避免中性 person）。 */
@@ -202,6 +245,7 @@ export async function generateImage(
   const height = sanitizeImageDim(opts.height, config.ideogramHeight);
   const seed = opts.seed ?? Math.floor(Math.random() * 2_147_483_647);
   const scene = opts.scene ?? false;
+  const portrait = opts.portrait ?? false;
 
   if (!config.ideogramUrl) {
     return { ok: false, error: '未配置生图服务地址（IDEOGRAM_URL）' };
@@ -209,7 +253,11 @@ export async function generateImage(
 
   try {
     let finalPrompt: string;
-    if (scene) {
+    if (portrait) {
+      // 立绘：gemma 转写外观（全身服装），拼竖屏全身立绘后缀；失败用原始中文兜底。
+      const expanded = await gemmaExpandPortrait(naturalPrompt.trim(), opts.gender);
+      finalPrompt = `${expanded ?? naturalPrompt.trim()}, ${PORTRAIT_STYLE_SUFFIX}`;
+    } else if (scene) {
       // 场景配图：gemma 判断是否出人/出脸，按 has_face 决定是否追加脸质量词。
       // gemma 失败时用原始中文直接拼基础后缀（Krea 2 的 Qwen3-VL 编码器能理解中文）。
       const expanded = await gemmaExpandScene(naturalPrompt.trim(), opts.appearance, opts.gender);

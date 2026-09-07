@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Send, Sparkles, Copy, Undo2, Quote } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 
 export interface ScriptPlayMessage {
   id: string;
@@ -281,19 +280,23 @@ export const ScriptPlaySessionScreen: React.FC<ScriptPlaySessionScreenProps> = (
 
           // --- 3. Companion / NPC Chat Bubble ---
           if (item.type === 'character') {
-            const avatarSrc = item.avatarUrl || getAnimeMaleAvatar(item.speaker || role1Name);
+            const avatarSrc = item.avatarUrl || '';
 
             return (
               <div key={item.id} className="flex flex-col items-start gap-1.5">
                 {/* Sender Title Header */}
                 <div className="flex items-center gap-1.5 pl-0.5">
                   <div className="w-6 h-6 rounded-full overflow-hidden border border-border-dark/5 flex items-center justify-center text-[11px] font-bold shadow-2xs">
-                    <img
-                      src={avatarSrc}
-                      alt={item.speaker || role1Name}
-                      className="w-full h-full object-cover"
-                      referrerPolicy="no-referrer"
-                    />
+                    {avatarSrc ? (
+                      <img
+                        src={avatarSrc}
+                        alt={item.speaker || role1Name}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <span>{(item.speaker || role1Name || '伴').slice(-1)}</span>
+                    )}
                   </div>
                   <span className="text-xs font-bold text-ink/90">
                     {item.speaker || `${role1Name} / 苏导`}

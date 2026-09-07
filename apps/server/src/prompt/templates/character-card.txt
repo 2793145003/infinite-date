@@ -28,6 +28,7 @@
 
 【与玩家的关系】
 {{player_relation}}
+{{drive}}
 
 【特长与短板】
 {{skills}}

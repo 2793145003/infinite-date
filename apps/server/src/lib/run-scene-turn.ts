@@ -116,6 +116,8 @@ export interface SceneTurnInput {
     time_elapsed?: string;
     /** 环境线索（旁白可在相关情境自然带出；仅任务场景有，剧本/约会为空）。 */
     environmental_clues?: string;
+    /** 抑制环境旁白：位面任务走纯对话/动描，不生成开场环境旁白与说话前后氛围旁白。 */
+    suppress_narration?: boolean;
   };
   /** 在场角色 → 演员上下文（system 用 actor 模板填充的变量） */
   actors: Record<string, {
@@ -479,7 +481,7 @@ export async function runActor(
     messages,
     {
       schema: ACTOR_JSON_SCHEMA,
-      temperature: 0.85,
+      temperature: 0.75,
       maxTokens: 2048,
       maxRetries: 2, // 共 3 次尝试
       normalize: normalizeActorOut,
@@ -922,7 +924,8 @@ export async function runSceneTurnNamed(
   let movePushed = false; // 每轮只接受第一个 move 拍（namer 多次点名可能重复判定同一移动）
 
   // 首次开场（玩家从未发过言）：先来一段环境旁白作为第一拍
-  if (!input.scene.has_player_spoken) {
+  // （位面任务 suppress_narration=true 时跳过，走纯对话/动描开场）
+  if (!input.scene.has_player_spoken && !input.scene.suppress_narration) {
     try {
       const locName = input.scene.location ?? '某个地方';
       const locDesc = input.scene.location_desc ?? '';
@@ -1091,7 +1094,7 @@ export async function runSceneTurnNamed(
 
     // 自动旁白：男主说话前有几率铺垫氛围（点名版旁白补偿）
     const isMaleLead = maleNames.includes(speaker);
-    if (isMaleLead) {
+    if (isMaleLead && !input.scene.suppress_narration) {
       await maybeAutoNarration({
         p: NARRATE_BEFORE_P,
         before: true,
@@ -1150,7 +1153,7 @@ export async function runSceneTurnNamed(
     }
 
     // 自动旁白：男主说话后有几率补一句余韵/转场（点名版旁白补偿）
-    if (isMaleLead) {
+    if (isMaleLead && !input.scene.suppress_narration) {
       await maybeAutoNarration({
         p: NARRATE_AFTER_P,
         before: false,

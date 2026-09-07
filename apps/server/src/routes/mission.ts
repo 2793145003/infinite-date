@@ -298,25 +298,8 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
   app.post('/missions/divine', async (req, reply) => {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
-
-    const { cast } = (req.body ?? {}) as { cast?: number[] };
-    if (!cast || !Array.isArray(cast) || cast.length !== 6 || cast.some((v) => !Number.isInteger(v) || v < 0 || v > 3)) {
-      return reply.code(400).send({ error: '摇卦数据非法：需要 6 爻、每爻 0-3 个"背"' });
-    }
-
-    const seq = (db.prepare(
-      `SELECT COUNT(*) as c FROM missions WHERE player_id = ? AND quest_type = 'world'`
-    ).get(playerId) as { c: number }).c;
-    const div = castHexagram(playerId, 'world', seq, { cast });
-
-    return reply.send({
-      guaXiang: div.ben.guaXiang, // 卦象名，如"地天泰"
-      name: div.ben.name,          // 卦名，如"泰"
-      lines: div.lines,            // 六爻阴阳 [0阴1阳，初→上]
-      dong: div.dong,              // 动爻位 [1-6]
-      shichen: div.shichen,
-      dayGanZhi: div.dayGanZhi,
-    });
+    // [下线] 世界任务已替换为位面任务系统（卦象纯函数保留待用）
+    return reply.send({ disabled: true, message: '世界任务已下线，请使用位面任务' });
   });
 
   // ─── 生成世界任务 ───────────────────────────────────
@@ -325,90 +308,16 @@ export async function missionRoutes(app: FastifyInstance): Promise<void> {
   app.post('/missions/generate', async (req, reply) => {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
-
-    // 玩家摇出的 6 爻背数（可选；缺失则用确定性 hash fallback）
-    const { cast } = (req.body ?? {}) as { cast?: number[] };
-    if (cast != null && (!Array.isArray(cast) || cast.length !== 6 || cast.some((v) => !Number.isInteger(v) || v < 0 || v > 3))) {
-      return reply.code(400).send({ error: '摇卦数据非法：需要 6 爻、每爻 0-3 个"背"' });
-    }
-
-    // 检查是否已有available/active的任务（同时只持有一个世界任务）
-    const existing = db.prepare(`
-      SELECT id FROM missions
-      WHERE player_id = ? AND quest_type = 'world' AND status IN ('available', 'active')
-    `).get(playerId) as { id: string } | undefined;
-
-    if (existing) {
-      return reply.code(409).send({ error: '已有进行中或待接受的世界任务', missionId: existing.id });
-    }
-
-    const built = await buildWorldMission(playerId, cast);
-    return reply.send(built);
+    // [下线] 世界任务已替换为位面任务系统（卦象纯函数保留待用）
+    return reply.send({ disabled: true, message: '世界任务已下线，请使用位面任务' });
   });
 
   // ─── 预生成任务（成卦瞬间异步触发，后台 LLM，不阻塞）──────
   app.post('/missions/prepare', async (req, reply) => {
     const playerId = requireAuth(req, reply);
     if (!playerId) return;
-
-    // 玩家摇出的 6 爻背数
-    const { cast } = (req.body ?? {}) as { cast?: number[] };
-    if (cast == null || !Array.isArray(cast) || cast.length !== 6 || cast.some((v) => !Number.isInteger(v) || v < 0 || v > 3)) {
-      return reply.code(400).send({ error: '摇卦数据非法：需要 6 爻、每爻 0-3 个"背"' });
-    }
-
-    // 检查是否已有世界任务（available/active/preparing 都算占用）
-    const existing = db.prepare(`
-      SELECT id, status FROM missions
-      WHERE player_id = ? AND quest_type = 'world' AND status IN ('available', 'active', 'preparing')
-    `).get(playerId) as { id: string; status: string } | undefined;
-
-    if (existing) {
-      return reply.code(409).send({ error: '已有进行中或待接受的世界任务', missionId: existing.id });
-    }
-
-    // 起卦取卦名（供前端立即显示卦象）
-    const seq = (db.prepare(
-      `SELECT COUNT(*) as c FROM missions WHERE player_id = ? AND quest_type = 'world'`
-    ).get(playerId) as { c: number }).c;
-    const div = castHexagram(playerId, 'world', seq, { cast });
-
-    // 清理旧占位，插入 preparing 占位任务（metadata 存卦象，供前端"生成中"阶段显示）
-    db.prepare(`DELETE FROM missions WHERE player_id = ? AND quest_type = 'world' AND status IN ('preparing', 'failed')`).run(playerId);
-    const missionId = genId();
-    const ts = now();
-    const prepMetadata = JSON.stringify({
-      hexagram: {
-        ben: div.ben.guaXiang,
-        bian: div.bian.guaXiang,
-        hu: div.hu.guaXiang,
-        dong: div.dong,
-        lines: div.lines,
-      },
-    });
-    db.prepare(`
-      INSERT INTO missions (id, player_id, quest_type, assignee_type, assignee_id, character_id, world_id, title, description, status, reward, metadata, created_at)
-      VALUES (?, ?, 'world', 'player', ?, NULL, NULL, ?, '', 'preparing', 0, ?, ?)
-    `).run(missionId, playerId, playerId, '任务生成中…', prepMetadata, ts);
-
-    // 后台异步生成（不 await；失败标记 failed，前端检测后点重试）
-    void buildWorldMission(playerId, cast, missionId)
-      .then(() => {
-        app.log.info({ playerId, missionId }, '预生成世界任务成功');
-      })
-      .catch((err) => {
-        app.log.error({ err, playerId, missionId }, '预生成世界任务失败');
-        db.prepare(`UPDATE missions SET status = 'failed', description = '生成失败，点此重试' WHERE id = ? AND status = 'preparing'`).run(missionId);
-      });
-
-    return reply.send({
-      preparing: true,
-      missionId,
-      guaXiang: div.ben.guaXiang,
-      name: div.ben.name,
-      lines: div.lines,
-      dong: div.dong,
-    });
+    // [下线] 世界任务已替换为位面任务系统（卦象纯函数保留待用）
+    return reply.send({ disabled: true, message: '世界任务已下线，请使用位面任务' });
   });
 
   // ─── 获取任务列表 ───────────────────────────────────

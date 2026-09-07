@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Dices } from 'lucide-react';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 
 type SceneExploreStep = {
   type: 'narration' | 'encounter' | 'item' | 'caught';
@@ -310,12 +309,16 @@ export const SceneExploreScreen: React.FC<{
             <div className="flex flex-col gap-1.5">
               {herePeople.map((c) => (
                 <div key={c.characterId} className="frosted-glass rounded-2xl p-2.5 flex items-center gap-2.5">
-                  <img
-                    src={c.avatarType === 'image' && c.avatar ? `/v4/api/uploads/${c.avatar}` : getAnimeMaleAvatar(c.name)}
-                    alt={c.name}
-                    referrerPolicy="no-referrer"
-                    className="w-10 h-10 rounded-full object-cover border border-border shadow-2xs shrink-0"
-                  />
+                  {c.avatarType === 'image' && c.avatar ? (
+                    <img
+                      src={`/v4/api/uploads/${c.avatar}`}
+                      alt={c.name}
+                      referrerPolicy="no-referrer"
+                      className="w-10 h-10 rounded-full object-cover border border-border shadow-2xs shrink-0"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full border border-border shadow-2xs shrink-0 bg-bg-muted-2 flex items-center justify-center text-ink font-bold">{(c.name || '伴').slice(-1)}</div>
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-bold text-ink truncate">{c.name}</div>
                     {c.activity && <div className="text-[11px] text-ink-muted truncate mt-0.5">{c.activity}</div>}

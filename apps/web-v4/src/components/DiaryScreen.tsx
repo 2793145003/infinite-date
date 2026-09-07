@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { ChevronLeft, ArrowLeftRight } from 'lucide-react';
 import { Character } from '../types';
-import { getAnimeMaleAvatar } from '../data/animeAvatars';
 import { FactsScreen } from './FactsScreen';
 import { ArchiveView, type ArchiveKind } from './ArchiveView';
 import { MissionRecords } from './MissionRecords';
@@ -58,13 +57,17 @@ export function DiaryScreen({
         </button>
 
         <div className="flex items-center gap-3">
-          <div className="w-14 h-14 rounded-full bg-solid border-2 border-border-soft shadow-xs overflow-hidden shrink-0">
-            <img
-              src={curChar.avatarUrl || getAnimeMaleAvatar(curChar.name)}
-              alt={curChar.name}
-              className="w-full h-full object-cover"
-              referrerPolicy="no-referrer"
-            />
+          <div className="w-14 h-14 rounded-full bg-solid border-2 border-border-soft shadow-xs overflow-hidden shrink-0 flex items-center justify-center">
+            {curChar.avatarUrl ? (
+              <img
+                src={curChar.avatarUrl}
+                alt={curChar.name}
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <span className="text-xl font-bold text-solid-contrast">{(curChar.name || '伴').slice(-1)}</span>
+            )}
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-base font-bold text-ink tracking-tight">{curChar.name}</h2>
@@ -96,15 +99,19 @@ export function DiaryScreen({
                   >
                     <div
                       className={`w-7 h-7 rounded-lg flex items-center justify-center overflow-hidden ${
-                        isCur ? 'bg-solid-soft' : 'bg-bg-muted-2'
+                        isCur ? 'bg-solid-soft text-white' : 'bg-bg-muted-2 text-ink'
                       }`}
                     >
-                      <img
-                        src={char.avatarUrl || getAnimeMaleAvatar(char.name)}
-                        alt={char.name}
-                        className="w-full h-full object-cover"
-                        referrerPolicy="no-referrer"
-                      />
+                      {char.avatarUrl ? (
+                        <img
+                          src={char.avatarUrl}
+                          alt={char.name}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <span className="text-xs font-bold">{(char.name || '伴').slice(-1)}</span>
+                      )}
                     </div>
                     <span className="text-[10px] font-medium mt-1 truncate max-w-full">{char.name}</span>
                   </button>

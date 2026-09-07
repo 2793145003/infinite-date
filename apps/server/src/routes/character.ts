@@ -13,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { db } from '../db';
 import { requireAuth } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
-import { loadCharacterData, getCharacterAvatar } from '../lib/character';
+import { loadCharacterDataRaw, getCharacterAvatar, expandCapsules, getPlayerName } from '../lib/character';
 import type { CharacterData } from '@idate/shared';
 
 export async function characterRoutes(app: FastifyInstance): Promise<void> {
@@ -25,7 +25,7 @@ export async function characterRoutes(app: FastifyInstance): Promise<void> {
 
     const { characterId } = req.params as { characterId: string };
 
-    const data = loadCharacterData(playerId, characterId);
+    const data = loadCharacterDataRaw(playerId, characterId);
     if (!data) {
       return reply.code(404).send({ error: '角色不存在' });
     }
@@ -51,7 +51,7 @@ export async function characterRoutes(app: FastifyInstance): Promise<void> {
       'SELECT 1 FROM character_player_data WHERE player_id = ? AND source_character_id = ?'
     ).get(playerId, characterId);
 
-    // 有 fork 时额外返回公共原版，供前端对比
+    // 有 fork 时额外返回公共原版，供前端对比（返回胶囊原文，前端用 chip 渲染，避免作者看到真实名字后写死）
     let publicData: CharacterData | null = null;
     if (hasFork) {
       const pubChar = db.prepare('SELECT character_data FROM characters WHERE id = ?').get(characterId) as { character_data: string } | undefined;
@@ -61,7 +61,10 @@ export async function characterRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return reply.send({
+      // 胶囊原文（供编辑界面用 chip 渲染，作者点按钮插入占位符、不写死名字）
       characterData: data,
+      // 展开后（供只读展示如角色档案页显示真实名字）
+      characterDataExpanded: expandCapsules(data, getPlayerName(playerId)),
       hasFork,
       isPublic: !!db.prepare('SELECT 1 FROM characters WHERE id = ?').get(characterId),
       publicData,

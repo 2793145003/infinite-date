@@ -5,6 +5,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './schema';
 import { SCENE_SCHEMA_SQL } from '../lib/scene-schema';
+import { PLANE_SCHEMA_SQL } from '../lib/plane-schema';
 import { config } from '../config';
 
 const db = new DatabaseSync(config.dbPath);
@@ -40,6 +41,7 @@ function migration(id: string, fn: () => void): void {
 // 未建而抛 no such table（见 REVIEW_V4.md 🔴-1，全新库首启失败）
 db.exec(SCHEMA_SQL);
 db.exec(SCENE_SCHEMA_SQL);
+db.exec(PLANE_SCHEMA_SQL);
 
 // migration: locations 加 home_of 列（标记角色住所）
 migration('locations_home_of', () => db.exec('ALTER TABLE locations ADD COLUMN home_of TEXT'));
@@ -187,6 +189,12 @@ migration('scene_sessions_scenario_fields', () => {
 
 // migration: scene_sessions 加 revealed_clues 列（破案玩法已揭示的线索 id，JSON 数组）
 migration('scene_sessions_revealed_clues', () => db.exec("ALTER TABLE scene_sessions ADD COLUMN revealed_clues TEXT NOT NULL DEFAULT '[]'"));
+
+// migration: scene_sessions 加 plane_character_id 列（位面任务：标记会话绑定的位面崽，非位面会话为 NULL）
+migration('scene_sessions_plane_char', () => db.exec("ALTER TABLE scene_sessions ADD COLUMN plane_character_id TEXT"));
+
+// migration: plane_characters 加 appearance 列（位面崽外貌，用于生成角色图/崽图）
+migration('plane_characters_appearance', () => db.exec("ALTER TABLE plane_characters ADD COLUMN appearance TEXT NOT NULL DEFAULT ''"));
 
 // migration: turn_player_facts.scene_session_id 改为允许 NULL + 补 FK
 // 背景：旧表（生产库）scene_session_id 是 NOT NULL 且无 FK，而 scene-schema.ts 的新建表 SQL 是
