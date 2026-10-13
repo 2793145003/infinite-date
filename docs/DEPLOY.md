@@ -2,7 +2,7 @@
 
 > 目的：服务挂了照着这里重启。只记"怎么起、怎么杀、怎么验证"，不解释业务。
 >
-> 最后更新：2026-08-30（restart.sh 一键重启 + admin 重启 API）
+> 最后更新：2026-10-13（新增 QQ 桥常驻进程的起停与排查）
 
 ---
 
@@ -15,6 +15,7 @@
 | web-v4（心动终端） | 3001 | 0.0.0.0 | `apps/web-v4` | `npm run dev` | Express + Vite middleware，挂 8080 `/v4` |
 | dsh 后端 | 3080 | 127.0.0.1 | `deepseek-harness/repo` | 见下 | DeepSeek Harness |
 | dsh 认证反代 | 3090 | 127.0.0.1 | `deepseek-harness/proxy` | `node proxy.js` | Basic Auth + Cookie 会话 |
+| QQ 桥 | 无 | — | `apps/server` | `npx tsx src/qq-bridge/main.ts` | 把男主短信推到玩家手机 QQ；**独立进程**，由 `start-all.sh` 托管 |
 
 > dsh 完整启动见 skill `dsh-subpath-mount`。简记：后端 `cd /output/deepseek-harness/repo && DSH_HOME=/output/deepseek-harness/home DSH_TELEMETRY_DISABLED=1 node apps/cli/lib/bin.js web`，反代 `cd /output/deepseek-harness/proxy && node proxy.js`。
 
@@ -32,11 +33,57 @@ bash /output/infinite-date-v2/restart.sh
 curl -X POST http://127.0.0.1:3000/api/admin/restart -H "Authorization: Bearer <admin token>"
 ```
 
-脚本流程：`sleep 2`（等 HTTP 响应先返回）→ 杀监听 3000 的 node（父链级联退出）→ 等端口释放（最多 10s）→ `source /tmp/idate_env.sh` → `setsid nohup npm run start` 启动新后端。
+脚本流程：`sleep 2`（等 HTTP 响应先返回）→ 杀监听 3000 的 node（父链级联退出）→ 等端口释放（最多 10s）→ **从项目根同步 `idate_env.sh` 到 `/tmp`** → `setsid nohup npm run start` 启动新后端。
+
+> 环境变量真源约定：**项目根的 `idate_env.sh` 是唯一真源**，`/tmp/idate_env.sh` 只是运行时镜像（容器重启会被清空）。
+> `restart.sh` 与 `start-all.sh` 每次启动都会把项目根同步到 `/tmp`，然后 source。
+> 如果 `/tmp` 里存在项目根没有的变量，脚本会打印警告并**跳过覆盖**（避免丢掉只写在 `/tmp` 的临时配置）——
+> 看到那条警告就把缺的变量补进项目根。
 
 - 日志：重启日志 `/tmp/idate_restart.log`，后端输出 `/tmp/idate_backend.log`。
 - 只重启后端，前端（8080/3001）不受影响，无需重启。
 - 仍要等 **40~60s** 后端才就绪（见下方陷阱 5），别急。
+
+---
+
+## QQ 桥（常驻进程，不占端口）
+
+把男主的短信推到玩家手机 QQ 的锁屏通知，玩家在 QQ 里回一句会落到同一条 thread 上。
+**独立进程**：桥挂了不影响后端与网页（出站只读库、入站走 HTTP 接口），只重启后端也不影响桥。
+
+```bash
+# 启动：已纳入 start-all.sh（幂等，已在跑就识别为「已在运行」）
+bash /output/infinite-date-v2/start-all.sh
+
+# 看状态
+cat /tmp/idate_qqbridge.pid              # 桥进程 pid
+kill -0 $(cat /tmp/idate_qqbridge.pid)   # 判活：0=活着
+tail -f /tmp/idate_qqbridge.log          # 日志
+
+# 停（重启后端不会停它，要单独停）
+kill $(cat /tmp/idate_qqbridge.pid)
+```
+
+| 项 | 值 |
+|---|---|
+| 日志 | `/tmp/idate_qqbridge.log` |
+| pid 文件 | `/tmp/idate_qqbridge.pid` |
+| 启动方式 | `setsid`（必须脱离终端；`nohup` 不够，会随调用方退出） |
+| 环境变量 | 与后端同一套约定：真源是项目根 `idate_env.sh`，其中 `IDATE_QQ_SECRET_KEY` 是 AppSecret 加密密钥 |
+| 节奏 | 出站每 20s 一轮；每 60s 扫一次新绑定并接网关（别人扫码后最多 60s 自动生效，无需手动起桥） |
+
+**日志对照表**（排查先看这里）：
+
+| 日志 | 含义 |
+|---|---|
+| `已连网关: <appId>（角色 …）` + `✅ 网关握手成功（READY…）` | 这个机器人连上了，能收能发 |
+| `出站：扫到 N / 发出 N / 跳过 N / 失败 N` | 有消息在推。"扫到 >0 但发出 0" 说明都是发过的（幂等生效，正常） |
+| `上一轮出站还在跑，跳过本轮` | 重入锁生效（一轮超 20s 的正常表现，**不是故障**） |
+| `限流中断 N` | 触到 QQ 频控（单关系 20/qpm、bot 30/qpm），剩下留到下一轮 |
+| `机器人不存在` / 状态被判 `invalid` | AppID/AppSecret 失效，让玩家在角色卡上重新扫码 |
+
+**判活的坑**：不要用 `pgrep -f "qq-bridge/main.ts"` —— 它会误匹配调用方的 shell 命令，
+明明没跑却报「已在运行」。一律用 pid 文件 + `kill -0`。
 
 ---
 

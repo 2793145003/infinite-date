@@ -23,6 +23,8 @@ import { getCurrentSchedule } from '../lib/schedule';
 import { embed, storeEmbedding } from '../lib/embedding';
 import { resetMomentUrge, generateProactiveSmsAboutMoment } from '../lib/proactive';
 import { generateImage } from '../lib/ai-image';
+import { findRecentDuplicateComment } from '../lib/comment-dedupe';
+import { findRecentDuplicateMoment } from '../lib/send-dedupe';
 
 export async function momentRoutes(app: FastifyInstance): Promise<void> {
 
@@ -143,6 +145,15 @@ export async function momentRoutes(app: FastifyInstance): Promise<void> {
 
     const momentId = genId();
     const ts = now();
+
+    // 幂等：同一玩家 60s 内发完全相同的内容（响应丢失后手动重发）→ 直接返回已有的那条
+    if (content?.trim()) {
+      const dupMoment = findRecentDuplicateMoment(db, playerId, content.trim(), ts);
+      if (dupMoment) {
+        return reply.send({ ok: true, momentId: dupMoment.id, duplicate: true });
+      }
+    }
+
     db.prepare(`
       INSERT INTO moments (id, player_id, author_type, author_id, content, image_path, mood, location_name, trigger_type, visibility, visible_to, created_at)
       VALUES (?, ?, 'player', ?, ?, ?, '', ?, 'player', ?, ?, ?)
@@ -176,15 +187,24 @@ export async function momentRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const interactionId = genId();
+    const body = text.trim();
+
+    // 服务端兜底：同一玩家对同一条动态的「完全相同」评论在窗口内视为重复提交
+    // （客户端 Enter 按键自动重复/连点/重发都会走到这里，不拦会出现玩家刷屏 + NPC 逐条回复）
+    const dup = findRecentDuplicateComment(db, playerId, momentId, body, now());
+    if (dup) {
+      return reply.send({ ok: true, interactionId: dup.id, duplicate: true });
+    }
+
     db.prepare(`
       INSERT INTO moment_interactions (id, moment_id, author_type, author_id, interaction_type, body, created_at)
       VALUES (?, ?, 'player', ?, 'comment', ?, ?)
-    `).run(interactionId, momentId, playerId, text.trim(), now());
+    `).run(interactionId, momentId, playerId, body, now());
 
     // 如果评论的是NPC的帖子，异步触发NPC回复评论 + 清零该NPC的朋友圈意愿
     if (moment.author_type === 'character') {
       resetMomentUrge(playerId, moment.author_id);
-      triggerNpcReplyToComment(playerId, momentId, moment.author_id, text.trim()).catch(() => {});
+      triggerNpcReplyToComment(playerId, momentId, moment.author_id, body).catch(() => {});
     }
 
     return reply.send({ ok: true, interactionId });
@@ -323,6 +343,16 @@ export async function generateNpcMoment(
     }
 
     const momentId = genId();
+
+    // 幂等：同一角色 60s 内给同一玩家生成的完全相同内容（触发器重叠，如 scheduler tick 追尾）
+    // → 返回已经存在的那条，不重复落库、不重复写记忆
+    const dupNpcMoment = db.prepare(`
+      SELECT id FROM moments
+      WHERE player_id = ? AND author_type = 'character' AND author_id = ? AND content = ? AND created_at >= ?
+      ORDER BY created_at DESC LIMIT 1
+    `).get(playerId, characterId, content, now() - 60_000) as { id: string } | undefined;
+    if (dupNpcMoment) return dupNpcMoment.id;
+
     db.prepare(`
       INSERT INTO moments (id, player_id, author_type, author_id, content, mood, location_name, trigger_type, created_at)
       VALUES (?, ?, 'character', ?, ?, '', ?, ?, ?)

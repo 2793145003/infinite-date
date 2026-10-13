@@ -256,7 +256,8 @@ export type ActiveTab =
   | 'novel-play'
   | 'admin'
   | 'experimental'
-  | 'plane';
+  | 'plane'
+  | 'world';
 
 /** 当前角色的「当前行程」——地图约会/短信约会/任务/剧本四态，空闲时 idle */
 export type ActivityState =

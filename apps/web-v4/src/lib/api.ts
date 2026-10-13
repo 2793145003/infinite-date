@@ -6,6 +6,10 @@
 // ─── 角色数据（后端 CharacterData，本地定义避免引入 monorepo 依赖）────
 
 import type { SceneNpc, SceneLocationEntry } from '../components/admin/types';
+import { compressImage } from './image-compress';
+import { uploadFileXhr, type UploadProgress } from './upload-client';
+
+export type { UploadProgress, UploadResult } from './upload-client';
 
 export interface Personality {
   surface: string;
@@ -593,15 +597,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ json, isPublic }),
     }),
-  // 头像上传（multipart，走原生 fetch；token 由 installFetchAuth 全局注入）
-  uploadImage: (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    return fetch(`${API_BASE}/upload/image`, { method: 'POST', body: formData }).then(async (res) => {
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '上传失败');
-      return data as { imagePath: string; size: number };
-    });
+  /**
+   * 头像上传（multipart）。用 XHR 而不是 fetch：
+   *  - 只有 XHR 的 upload.onprogress 能驱动进度条
+   *  - 老实现用裸 fetch，没有超时：弱网下请求会永久挂着，UI 永远停在「上传中」、按钮点不动
+   * opts.compress=true 时先在本机 canvas 缩放/重编码（实测 2.4MB 原图 → 143KB，约 90ms），
+   * 手机原图不必再在弱网上传几十秒。压缩失败一律回退原文件，不阻断上传。
+   */
+  uploadImage: (
+    file: File,
+    opts: { compress?: boolean; onProgress?: (p: UploadProgress) => void } = {},
+  ) => {
+    const token = getToken();
+    const upload = (f: File) =>
+      uploadFileXhr(f, {
+        apiBase: API_BASE,
+        token,
+        timeoutMs: 90_000,
+        onProgress: opts.onProgress,
+        onUnauthorized: () => {
+          clearToken();
+          onAuthFail?.();
+        },
+      });
+
+    if (!opts.compress) return upload(file);
+    opts.onProgress?.({ phase: 'compress', pct: 0 });
+    return compressImage(file).then((r) => upload(r.file));
   },
 
   // AI 生成图片（调 /ai-image/generate，prompt 传中文描述，返回 imagePath）
@@ -627,8 +649,14 @@ export const api = {
   listMoments: () => request<{ moments: ApiMoment[]; serverTime: number }>('/moments'),
   createMoment: (content: string, imagePath?: string, visibility?: string, visibleTo?: string[], location?: string) =>
     request('/moments', { method: 'POST', body: JSON.stringify({ content, imagePath, visibility, visibleTo, location }) }),
-  commentMoment: (momentId: string, text: string) =>
-    request(`/moments/${momentId}/comment`, { method: 'POST', body: JSON.stringify({ text }) }),
+  // 评论：可传 signal。评论接口是快接口，调用方用超时兜底，避免响应丢失时前端一直挂着
+  // （注意：request() 其它调用包含 LLM 长请求，不能加全局超时）
+  commentMoment: (momentId: string, text: string, signal?: AbortSignal) =>
+    request(`/moments/${momentId}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+      ...(signal ? { signal } : {}),
+    }),
   likeMoment: (momentId: string) => request(`/moments/${momentId}/like`, { method: 'POST' }),
   deleteMoment: (momentId: string) => request(`/moments/${momentId}`, { method: 'DELETE' }),
   unreadMoments: (since = 0) => request<{ count: number }>(`/moments/unread-count?since=${since}`),
@@ -708,6 +736,14 @@ export const api = {
 
   // 短信未读总数（首页/导航角标）
   unreadSms: () => request<{ count: number }>('/sms/unread-count'),
+
+  // 某线程最近若干轮心绪（旧接口，保留兼容）
+  getThreadEmotions: (threadId: string, limit = 5) =>
+    request<EmotionPanelData>(`/sms/threads/${threadId}/emotions?limit=${limit}`),
+
+  // 角色此刻的心绪 + 跨渠道（短信/约会合并）的情绪史 —— 点头像弹窗统一走这个
+  getCharacterEmotions: (characterId: string, limit = 5) =>
+    request<EmotionPanelData>(`/characters/${characterId}/emotions?limit=${limit}`),
 
   // ─── 剧本系统（场景剧本 scene-scenario）────────────────
   createScenario: (data: { title: string; description: string }) =>
@@ -1230,6 +1266,46 @@ export const api = {
     request<{ deleted: boolean }>(`/plane/sessions/${sessionId}`, { method: 'DELETE' }),
   listPlaneSessions: (active?: boolean) =>
     request<{ sessions: PlaneSessionSummary[] }>(`/plane/sessions${active ? '?active=1' : ''}`),
+
+  // ─── 衍生世界（修仙程序化世界演化）────────────────────
+  worldCreate: (data: { name?: string; seed?: number; npcCount?: number; regions?: number; cells?: number }) =>
+    request<{ id: string; name: string; tick: number; map: WorldMapSummary; player: WorldPlayerSummary | null; npcCount: number }>('/world', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  worldList: () => request<{ worlds: WorldSummary[] }>('/world'),
+  worldState: (id: string) => request<WorldState>(`/world/${id}/state`),
+  worldAdvance: (id: string, months: number) =>
+    request<{ tick: number; events: WorldEvent[]; player: WorldPlayerSummary | null }>(`/world/${id}/advance`, {
+      method: 'POST',
+      body: JSON.stringify({ months }),
+    }),
+  worldMove: (id: string, loc: number) =>
+    request<{ loc: number; locName: string; met: WorldNpcSummary[]; player: WorldPlayerSummary | null }>(`/world/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ loc }),
+    }),
+  worldTalk: (id: string, npcId: number, message: string) =>
+    request<{ npcId: number; npcName: string; reply: WorldChatReply; event: WorldEvent | null; affinityToPlayer: number; hasCard: boolean }>(`/world/${id}/talk`, {
+      method: 'POST',
+      body: JSON.stringify({ npcId, message }),
+    }),
+  worldCraftStart: (id: string, recipeId: number) =>
+    request<{ recipeId: number; recipeName: string; outputName: string; board: WorldBoard; movesLeft: number }>(`/world/${id}/craft/start`, {
+      method: 'POST',
+      body: JSON.stringify({ recipeId }),
+    }),
+  worldCraftSwap: (id: string, board: WorldBoard, x1: number, y1: number, x2: number, y2: number) =>
+    request<{ board: WorldBoard; outcome: { valid: boolean; gained?: number; score?: number; chains?: number } }>(`/world/${id}/craft/swap`, {
+      method: 'POST',
+      body: JSON.stringify({ board, x1, y1, x2, y2 }),
+    }),
+  worldCraftFinish: (id: string, recipeId: number, board: WorldBoard) =>
+    request<{ result: WorldCraftResult; player: WorldPlayerSummary | null }>(`/world/${id}/craft/finish`, {
+      method: 'POST',
+      body: JSON.stringify({ recipeId, board }),
+    }),
+  worldDelete: (id: string) => request<{ ok: boolean }>(`/world/${id}`, { method: 'DELETE' }),
 };
 
 // ─── 回忆归档类型（日记页）──────────────────────────────
@@ -1270,6 +1346,21 @@ export interface ArchiveMessage {
   internal_notable: number;
   internal_viewed: number;
   created_at: number;
+}
+
+/** 心绪弹窗数据：turns 旧→新（便于直接画折线），current 为最新一轮 */
+export interface EmotionTurn {
+  messageId: string;
+  createdAt: number;
+  emotions: Record<string, number>;
+  top: { key: string; cn: string; value: number };
+}
+export interface EmotionPanelData {
+  characterId: string;
+  /** 这份「此刻心绪」最后是哪个渠道更新的：sms | scene | null */
+  source?: string | null;
+  turns: EmotionTurn[];
+  current: { key: string; cn: string; value: number; emotions: Record<string, number>; createdAt: number } | null;
 }
 
 export interface ArchiveSmsItem {
@@ -1463,4 +1554,113 @@ export interface NovelSessionData {
   protagonist: { name: string; pronoun: string };
   characters: NovelCharacter[];
   turns: NovelTurn[];
+}
+
+// ─── 衍生世界类型（修仙程序化世界演化）──────────────────
+
+export interface WorldNpcSummary {
+  id: number;
+  name: string;
+  gender: string;
+  realm: number;
+  realmName: string;
+  faction: string;
+  loc: number;
+  locName: string;
+  alive: boolean;
+  liveliness: number;
+  affinityToPlayer: number;
+  hasCard: boolean;
+}
+
+export interface WorldItem {
+  id: number;
+  name: string;
+  type: string;
+  quality: string;
+  lifespanBonus?: number;
+  qiBonus?: number;
+  realmBreak?: number;
+}
+
+export interface WorldPlayerSummary {
+  name: string;
+  gender: string;
+  realm: number;
+  realmName: string;
+  qi: number;
+  aptitude: number;
+  comprehension: number;
+  charm: number;
+  fortune: number;
+  lifespan: number;
+  loc: number;
+  locName: string;
+  energy: number;
+  actionPoints: number;
+  backpack: WorldItem[];
+  affinities: Record<string, number>;
+}
+
+export interface WorldEvent {
+  id: number;
+  tick: number;
+  type: string;
+  desc: string;
+  visibility: string;
+  loc: number;
+  npcIds: number[];
+  playerIntervened?: boolean;
+  outcome?: string;
+}
+
+export interface WorldMapSummary {
+  regions: number;
+  cells: number;
+  size: number;
+  regionNames: string[];
+  cellNames: string[];
+}
+
+export interface WorldSummary {
+  id: string;
+  name: string;
+  seed: number;
+  tick: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorldState {
+  id: string;
+  name: string;
+  seed: number;
+  tick: number;
+  map: WorldMapSummary;
+  player: WorldPlayerSummary | null;
+  npcs: WorldNpcSummary[];
+  recentEvents: WorldEvent[];
+  publicEvents: WorldEvent[];
+}
+
+export interface WorldBoard {
+  size: number;
+  cells: (string | null)[][];
+  score: number;
+  movesLeft: number;
+}
+
+export interface WorldChatReply {
+  reply: string;
+  innerThought: string;
+  affinityDelta: number;
+  fact: string;
+}
+
+export interface WorldCraftResult {
+  success: boolean;
+  item?: WorldItem;
+  quality?: string;
+  score?: number;
+  desc: string;
 }

@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Send, ArrowLeft, Image as ImageIcon, MapPin, Target } from 'lucide-react';
 import { imageUrl, api } from '../lib/api';
 import { ImageViewer } from './ImageViewer';
+import { EmotionModal } from './EmotionModal';
+import { glowStyle } from '../lib/emotionVisual';
 
 interface SmsThread {
   id: string;
@@ -71,6 +73,17 @@ const formatTime = (ts: number): string => {
   return `${h}:${m}`;
 };
 
+/** 从消息 metadata 里取心绪（后端把一轮的心绪挂在该轮第一条 NPC 气泡上） */
+function parseEmotionMeta(metadata?: string | null): Record<string, number> | null {
+  if (!metadata) return null;
+  try {
+    const e = (JSON.parse(metadata) as { emotions?: Record<string, number> }).emotions;
+    return e && typeof e === 'object' ? e : null;
+  } catch {
+    return null;
+  }
+}
+
 export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHome, onOpenCharacterArchive, onOpenConversation, onOpenScene, initialCharacterId, onUnreadChange }) => {
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [activeThread, setActiveThread] = useState<SmsThread | null>(null);
@@ -89,6 +102,32 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
   const [retrying, setRetrying] = useState(false);
   const [showInternal, setShowInternal] = useState<string | null>(null);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  const [showEmotion, setShowEmotion] = useState(false);
+
+  // 每条 NPC 气泡所属轮次的心绪：一轮 = 一条玩家消息 + 其后的 NPC 消息，同轮共用一份心绪
+  const emotionByMsg = useMemo(() => {
+    const map: Record<string, Record<string, number> | null> = {};
+    let cur: Record<string, number> | null = null;
+    for (const m of messages) {
+      if (m.sender === 'player') {
+        cur = null; // 新的一轮开始
+        continue;
+      }
+      const e = parseEmotionMeta(m.metadata);
+      if (e) cur = e;
+      map[m.id] = cur;
+    }
+    return map;
+  }, [messages]);
+
+  // 顶部头像用最近一轮的心绪
+  const latestEmotion = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const e = parseEmotionMeta(messages[i]!.metadata);
+      if (e) return e;
+    }
+    return null;
+  }, [messages]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -581,14 +620,20 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div className="relative">
-            {renderAvatar('w-8.5 h-8.5')}
-            <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-1.5 ring-white ${onlineDot(activeThread.online_state)}`} />
-          </div>
-          <div>
-            <h2 className="text-xs font-bold text-ink tracking-tight">{activeThread.character_name}</h2>
-            <span className="text-[10px] text-ink-muted block truncate max-w-[150px]">{onlineLabel(activeThread.online_state)}</span>
-          </div>
+          <button
+            onClick={() => setShowEmotion(true)}
+            className="flex items-center gap-2.5 -m-1 p-1 rounded-xl hover:bg-bg-muted transition cursor-pointer text-left"
+            aria-label={`查看${activeThread.character_name}此刻的心绪`}
+          >
+            <div className="relative rounded-full" style={glowStyle(latestEmotion)}>
+              {renderAvatar('w-8.5 h-8.5')}
+              <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-1.5 ring-white ${onlineDot(activeThread.online_state)}`} />
+            </div>
+            <div>
+              <h2 className="text-xs font-bold text-ink tracking-tight">{activeThread.character_name}</h2>
+              <span className="text-[10px] text-ink-muted block truncate max-w-[150px]">{onlineLabel(activeThread.online_state)}</span>
+            </div>
+          </button>
         </div>
       </header>
 
@@ -612,7 +657,16 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
           }
           return (
             <div key={msg.id} className={`flex ${isPlayer ? 'justify-end' : 'justify-start'} gap-2 px-1 mb-3`}>
-              {!isPlayer && renderAvatar('w-8 h-8 mt-auto')}
+              {!isPlayer && (
+                <button
+                  onClick={() => setShowEmotion(true)}
+                  className="mt-auto shrink-0 flex rounded-full transition active:scale-95 cursor-pointer"
+                  style={glowStyle(emotionByMsg[msg.id])}
+                  aria-label={`查看${activeThread.character_name}此刻的心绪`}
+                >
+                  {renderAvatar('w-8 h-8')}
+                </button>
+              )}
               <div className={`flex flex-col ${isPlayer ? 'items-end' : 'items-start'} max-w-[72%]`}>
                 <div
                   className={`px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words ${
@@ -784,7 +838,11 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSend();
+            // 回车发送：挡住按键自动重复与输入法组词中的回车
+            if (e.key === 'Enter' && !e.repeat && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              handleSend();
+            }
           }}
           placeholder="发短信…"
           disabled={isSending}
@@ -813,6 +871,16 @@ export const SmsScreen: React.FC<SmsScreenProps> = ({ onOpenScenario, onBackToHo
       )}
 
       {viewerSrc && <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} />}
+
+      {showEmotion && (
+        <EmotionModal
+          characterId={activeThread.character_id}
+          characterName={activeThread.character_name}
+          avatar={avatar}
+          isDeity={isDeity}
+          onClose={() => setShowEmotion(false)}
+        />
+      )}
     </div>
   );
 };

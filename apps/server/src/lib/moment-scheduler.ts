@@ -20,6 +20,11 @@ import { checkNpcTaskInvite, sweepSoloMissions } from './npc-task';
 
 const TICK_INTERVAL = 5 * 60 * 1000; // 5 分钟扫一次
 
+// 重入锁：一轮 tick 要遍历所有玩家、每个玩家都要调 LLM（慢），
+// 若一轮超过 TICK_INTERVAL，setInterval 会让下一轮追尾并跑，
+// 同一个玩家的行程短信/朋友圈就会被生成两次（实测残留了几处 proactive 短信与 schedule 动态的重复）。
+let ticking = false;
+
 let started = false;
 export function startMomentScheduler(): void {
   if (started) return;
@@ -32,6 +37,23 @@ export function startMomentScheduler(): void {
 }
 
 async function tick(): Promise<void> {
+  if (ticking) {
+    console.warn('[moment-scheduler] 上一轮扫描还在跑，跳过本轮（避免重复生成）');
+    return;
+  }
+  ticking = true;
+  const t0 = Date.now();
+  try {
+    await runTick();
+  } finally {
+    ticking = false;
+    const cost = Date.now() - t0;
+    // 一轮接近/超过间隔说明设置得太密，值得留意
+    if (cost > TICK_INTERVAL) console.warn(`[moment-scheduler] 本轮扫描耗时 ${Math.round(cost / 1000)}s，超过间隔 ${TICK_INTERVAL / 1000}s`);
+  }
+}
+
+async function runTick(): Promise<void> {
   // NPC 任务 solo 到点回归（全局扫一次，不依赖玩家遍历）
   try {
     await sweepSoloMissions();

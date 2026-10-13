@@ -409,7 +409,7 @@ export function Conversation({
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onSend()}
+          onKeyDown={(e) => { /* 回车发送：挡住按键自动重复与输入法组词中的回车 */ if (e.key === 'Enter' && !e.repeat && !e.nativeEvent.isComposing) { e.preventDefault(); onSend(); } }}
           placeholder="输入消息…"
           disabled={sending}
         />

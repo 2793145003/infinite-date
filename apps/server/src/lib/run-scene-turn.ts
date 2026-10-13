@@ -17,6 +17,8 @@ import { chat, chatJson } from '../llm/adapter';
 import { loadPrompt, renderPrompt, loadGreetingSection } from '../prompt/loader';
 import { statsFns, isValidStatsFn } from './stats-functions';
 import { cleanStraySymbols } from './clean-text';
+import { EMOTION_SCHEMA, normalizeEmotions } from './emotion';
+import type { EmotionScores } from '@idate/shared';
 import { extractLastPlayerLine } from './repeat-detect';
 
 // ─── 类型 ─────────────────────────────────────────────
@@ -71,6 +73,8 @@ export interface TurnOutputItem {
   characterId?: string;
   /** 若该旁白拍触发了数值结算：真实 changes（旁白唯一的数字来源） */
   statsChanges?: StatsChange[];
+  /** 该拍结束时角色的八维心绪（仅 character，且只挂在该拍第一条气泡上） */
+  emotions?: EmotionScores;
 }
 
 export interface SceneTurnResult {
@@ -131,6 +135,8 @@ export interface SceneTurnInput {
     retrieved_memories: string;
     /** 任务场景下，该演员（同伴/居民）各自的立场——由代码逐人注入，不做「若你是……」条件判断 */
     stance?: string;
+    /** 该角色此刻的心绪注入文本（角色级状态 + 时间衰减，短信与约会共用同一份）；空串＝不注入 */
+    emotion_state?: string;
   }>;
   /** 数值系统定义；空数组 = 纯闲聊场景 */
   stats_config?: StatsConfigItem[];
@@ -309,6 +315,8 @@ interface ActorOut {
   internal_notable?: boolean;
   /** 角色主动带出移动意图：填目标地点名（如"我的办公室""阳台"），后端走层级匹配。只在角色真的要带人走时才填。 */
   move_to?: string;
+  /** 本拍结束时该角色此刻的八维心绪（约会侧接入，与短信共用同一份角色级状态） */
+  emotions?: EmotionScores;
 }
 
 /** 演员输出的 JSON Schema（vLLM json_schema 约束，强制输出可 parse 的合法 JSON）。
@@ -324,6 +332,8 @@ const ACTOR_JSON_SCHEMA = {
     internal: { type: 'string' },
     internal_notable: { type: 'boolean' },
     move_to: { type: 'string' },
+    // 心绪（可选）：模板里已写明输出要求；万一别的 actor 模板没写，缺了也不会出错
+    emotions: EMOTION_SCHEMA,
   },
   required: ['texts'],
 } as const;
@@ -373,6 +383,9 @@ function normalizeActorOut(obj: Record<string, unknown>): ActorOut | null {
   // move_to：string（可选）——角色主动带人走时填目标地点名
   if (obj.move_to !== undefined && typeof obj.move_to !== 'string') return null;
   if (typeof obj.move_to === 'string' && obj.move_to.trim()) out.move_to = obj.move_to.trim();
+  // emotions（可选）：八键齐全才采纳，否则视为没给（不影响台词）
+  const emotions = normalizeEmotions(obj.emotions);
+  if (emotions) out.emotions = emotions;
 
   return out;
 }
@@ -380,7 +393,6 @@ function normalizeActorOut(obj: Record<string, unknown>): ActorOut | null {
 export async function runActor(
   input: SceneTurnInput,
   speaker: string,
-  beatIntent: string,
   conversationSoFar: string,
   logs?: (s: string) => void,
 ): Promise<ActorOut> {
@@ -414,11 +426,18 @@ export async function runActor(
     companions: input.scene.companions_raw ?? '',
     scene_tone: input.scene.scene_tone ?? '',
     scene_rules: [input.scene.scene_rules, actor.stance].filter(Boolean).join('\n'),
-    beat_intent: beatIntent,
   });
   // 剧本场景无地点：location 为空时清理掉模板里残留的「地点：」空行
   if (!input.scene.location) {
     system = system.replace(/^地点：\s*$/m, '').replace(/^【地点导航】\n\s*\n/gm, '').replace(/^【地点导航】\n(?=（)/gm, '');
+  }
+  // 位面场景：tone 留空时清理掉模板里残留的「你所在的世界与场景」空区块
+  if (!input.scene.scene_tone) {
+    system = system.replace(/【你所在的世界与场景】\n\s*（[^）]*）\n?/g, '');
+  }
+  // 位面场景：player_description 留空（等第一轮模型输出回写）时清理掉「你们的关系」空区块
+  if (!actor.player_description) {
+    system = system.replace(/【你们的关系】\n\s*\n(?=【你记得的过往】)/, '');
   }
   // 群聊：只有同场确实还有别的角色时，才在 system 里告诉演员「谁也在场」。
   // 用 companions_raw（真实角色列表，非 locationName 兜底）判断，避免单人场景误报。
@@ -474,6 +493,18 @@ export async function runActor(
     { role: 'system', content: systemFinal },
     ...dialogTurns,
   ];
+
+  // 心绪注入：拼在最后一条 user 消息最前面——与短信侧同一位置。
+  // （离线实验证明放 system prompt 末尾会被强人设完全盖过：组间相似度只差 0.024，而 user 消息位置差 0.201）
+  if (actor.emotion_state) {
+    const lastIdx = messages.length - 1;
+    const last = messages[lastIdx]!;
+    if (lastIdx >= 1 && last.role === 'user') {
+      messages[lastIdx] = { ...last, content: `${actor.emotion_state}\n${last.content}` };
+    } else {
+      messages.push({ role: 'user', content: actor.emotion_state });
+    }
+  }
 
   // 严格解析 + 重试：先解析 JSON 并校验所有字段类型，任一字段对不上就重新调用 LLM，
   // 绝不把残缺 JSON/```json/字段名原文当台词露给用户。交由通用 chatJson 处理（剥围栏→parse→validate→重试）。
@@ -1065,7 +1096,7 @@ export async function runSceneTurnNamed(
       beatNo++;
       continue;
     }
-    const out = await runActor(input, speaker, '自然地推进此刻的互动，回应玩家刚才的话。', conversationSoFar, log);
+    const out = await runActor(input, speaker, conversationSoFar, log);
     const actCharId = input.actors[actKey]?.character_id;
 
     const rawBubbles = (Array.isArray(out.texts) && out.texts.length > 0)
@@ -1117,6 +1148,8 @@ export async function runSceneTurnNamed(
       const bubble = cleanStraySymbols(bubbles[bi]!);
       const internal = bi === 0 ? out.internal : '';
       const internalNotable = bi === 0 ? out.internal_notable : false;
+      // 心绪挂在该拍第一条气泡上（与短信侧一致：一轮/一拍只记一次）
+      const emotions = bi === 0 ? out.emotions : undefined;
       output.push({
         kind: 'character',
         content: bubble,
@@ -1126,6 +1159,7 @@ export async function runSceneTurnNamed(
         internalNotable,
         playerDescription: out.player_description,
         currentActivity: out.current_activity,
+        emotions,
       });
       onBeat?.({
         kind: 'character',
@@ -1136,6 +1170,7 @@ export async function runSceneTurnNamed(
         internalNotable,
         playerDescription: out.player_description,
         currentActivity: out.current_activity,
+        emotions,
       });
       conversationSoFar += `\n${speaker}：${bubble}`;
     }
@@ -1186,7 +1221,7 @@ export async function runSceneTurnNamed(
     if (maleSpoke.size === 0) {
       log('⚠️ 玩家发了话但本轮无任何男主发言，强制兜底拉男主回应…');
       const fbName = maleNames[0]!;
-      const fb = await runActor(input, fbName, '针对玩家刚才这句话自然地回应。', conversationSoFar, log);
+      const fb = await runActor(input, fbName, conversationSoFar, log);
       const fbBubbles = (Array.isArray(fb.texts) ? fb.texts : []).filter((s: string) => s && s.trim());
       const actCharId = input.actors[fbName]?.character_id;
       for (let bi = 0; bi < fbBubbles.length; bi++) {
@@ -1206,8 +1241,8 @@ export async function runSceneTurnNamed(
     if (visibleCount === 0 && maleNames.length > 0) {
       log('⚠️ 开场无可见输出，兜底让男主开场…');
       const fbName = maleNames[0]!;
-      // 兜底男主 intent 注入 circumstance 情境提示
-      let fbIntent = '开场自然地开口，和玩家展开对话。';
+      // 兜底男主：开场情境（circumstance）通过旁白前置注入，不再用"导演方向"
+      let fbSituation = '';
       const fbCirc = input.scene.circumstance;
       if (fbCirc && fbCirc !== 'default') {
         const fbGreeting = loadGreetingSection(fbCirc, {
@@ -1216,9 +1251,10 @@ export async function runSceneTurnNamed(
         });
         const fbParts = fbGreeting.split('【本场情境】');
         const fbSpecific = fbParts[1]?.trim() ?? '';
-        if (fbSpecific) fbIntent = `${fbIntent}\n${fbSpecific}`;
+        if (fbSpecific) fbSituation = fbSpecific;
       }
-      const fb = await runActor(input, fbName, fbIntent, conversationSoFar, log);
+      const fbConv = fbSituation ? `${fbSituation}\n${conversationSoFar}` : conversationSoFar;
+      const fb = await runActor(input, fbName, fbConv, log);
       const fbBubbles = (Array.isArray(fb.texts) ? fb.texts : []).filter((s: string) =>
         s.replace(/（[^（）]*）/g, '').replace(/\\([^()]*\\)/g, '').trim().length > 0);
       const actCharId = input.actors[fbName]?.character_id;

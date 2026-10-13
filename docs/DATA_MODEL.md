@@ -1115,6 +1115,84 @@ CREATE INDEX idx_novel_turns ON novel_turns(session_id, created_at);
 
 ---
 
+## 五·七、QQ 桥（qq-bridge，2026-10-13）
+
+把无限的**短信**接到 QQ 官方机器人：男主的短信推到玩家手机 QQ 的锁屏通知，玩家在 QQ 里回一句，
+落到同一条 thread 上。设计取舍、隔离性、并发防护见 `apps/server/src/qq-bridge/README.md`。
+
+⚠️ **这三张表全部由桥自己建**（`src/qq-bridge/schema.ts`），**不进 `db/schema.ts`**。
+这样主服务完全不感知它们、桥挂了也不影响主链路，而且 `git status` 可验证「零改动已有表」。
+迁移一律走 `schema.ts` 里的 `ALTER TABLE ... ADD COLUMN` 式判存补列。
+
+### qq_bot_bindings — 玩家 × 角色 的机器人绑定
+
+```sql
+CREATE TABLE qq_bot_bindings (
+  id                TEXT PRIMARY KEY,
+  player_id         TEXT NOT NULL,
+  character_id      TEXT NOT NULL,
+  app_id            TEXT NOT NULL,                    -- QQ 机器人 AppID
+  app_secret_enc    TEXT NOT NULL,                    -- AppSecret（加密存储，禁止落日志、禁止回传前端）
+  user_openid       TEXT,                             -- 玩家在这个机器人下的 openid（入站首条消息时回填）
+  status            TEXT NOT NULL DEFAULT 'pending',  -- pending | active | invalid
+  proactive_enabled INTEGER NOT NULL DEFAULT 0,       -- 玩家是否在机器人资料卡开了「主动消息」开关
+  access_token      TEXT,                             -- 缓存的 AppAccessToken
+  access_token_exp  INTEGER NOT NULL DEFAULT 0,       -- 过期时间戳（ms）
+  last_inbound_msg_id TEXT,                           -- 玩家最近一条消息的 msg_id（被动回复要用它）
+  last_inbound_at   INTEGER NOT NULL DEFAULT 0,       -- 被动消息窗口判断（C2C 是 60 分钟）
+  last_error        TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  since_ts          INTEGER NOT NULL DEFAULT 0,       -- 只外发这个时刻之后的短信（防绑定瞬间倒放历史）
+  welcomed_at       INTEGER,                          -- 接入欢迎短信发过没有（12h 静默防连发）
+  UNIQUE(player_id, character_id),
+  UNIQUE(app_id)
+);
+CREATE INDEX idx_qq_bindings_player ON qq_bot_bindings(player_id);
+```
+
+两条 UNIQUE 是**隔离性的地基**：一个机器人（AppID）在库里只可能属于一个 (玩家, 角色) ——
+不靠代码判断，玩家一旦发现「他不只跟我聊」就是乙女产品的死穴。
+
+### qq_outbox — 出站幂等台账
+
+主键就是 `text_messages.id`，所以网关重放、桥进程多开、崩溃重启都不会重复推送（同朋友圈重复事故的防御）。
+
+```sql
+CREATE TABLE qq_outbox (
+  msg_id      TEXT PRIMARY KEY,                     -- text_messages.id（图片消息是 "<id>:img"）
+  binding_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL,                        -- text | image
+  content     TEXT NOT NULL DEFAULT '',             -- 文本正文 / 图片 assetId
+  status      TEXT NOT NULL DEFAULT 'queued',       -- queued | sending | sent | failed | skipped
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  last_error  TEXT,
+  qq_msg_id   TEXT,                                 -- 腾讯返回的消息 id（真实送达凭据）
+  created_at  INTEGER NOT NULL,
+  sent_at     INTEGER,
+  passive_msg_id  TEXT,                             -- 这条是按哪个入站 msg_id 被动回复的
+  passive_msg_seq INTEGER,                          -- 第几次回复（msg_id + msg_seq 相同会被服务端去重，必须自增）
+  last_try_at     INTEGER                           -- 最后一次尝试时刻（判断 sending 是否卡死，默认 5 分钟接管）
+);
+CREATE INDEX idx_qq_outbox_status ON qq_outbox(status, created_at);
+```
+
+`sending` 是**原子占位**状态：并发的那一轮拿到 `changes=0` 后看到「有人正在发」就让开，
+避免「一轮超 20 秒被下一轮追尾、同一条消息发两遍」（实测症状：网页端只有一条/一张，QQ 上两条/两张，偶发）。
+
+### qq_inbound_seen — 入站去重
+
+```sql
+CREATE TABLE qq_inbound_seen (
+  key         TEXT PRIMARY KEY,                     -- f"{app_id}:{qq_msg_id}:{msg_seq}"
+  created_at  INTEGER NOT NULL
+);
+```
+
+去重键**带 `app_id`**：不同机器人可能有同名 `msg_id`，不带 appId 会互相顶掉。
+
+---
+
 ## 六、已知问题与设计决策
 
 ### 多态FK

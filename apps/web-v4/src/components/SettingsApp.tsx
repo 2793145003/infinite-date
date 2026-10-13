@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import type { PlayerInfo } from '../lib/api';
+import type { PlayerInfo, UploadProgress } from '../lib/api';
 import { api, clearToken, imageUrl } from '../lib/api';
 import { BackgroundPicker } from './BackgroundPicker';
 import { ImageViewer } from './ImageViewer';
+import { UploadProgressBar } from './UploadProgressBar';
 import { soundManager } from '../utils/audio';
 import { THEMES, getTheme, setTheme, type ThemeId, FONT_SCALES, getFontScale, setFontScale, type FontScaleId, getFishToggle, setFishToggle, getCustomTheme, applyCustomTheme, DEFAULT_CUSTOM_THEME, type CustomTheme, HOME_BG_PRESETS, V3_WALLPAPERS, getHomeBg, setHomeBg, clearHomeBg, type HomeBg, getBgOverlay, setBgOverlay, DEFAULT_BG_OVERLAY, BG_OVERLAY_MAX } from '../lib/themes';
 
@@ -29,6 +30,7 @@ export function SettingsApp({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadPct, setUploadPct] = useState<UploadProgress | null>(null);
   const [generatingAvatar, setGeneratingAvatar] = useState(false);
   const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
   const [canGenerate, setCanGenerate] = useState(false);
@@ -71,8 +73,9 @@ export function SettingsApp({
     if (!file) return;
     setShowAvatarMenu(false);
     setUploadingAvatar(true);
+    setUploadPct({ phase: 'compress', pct: 0 });
     try {
-      const res = await api.uploadImage(file);
+      const res = await api.uploadImage(file, { compress: true, onProgress: setUploadPct });
       await api.updatePlayer({ avatar: res.imagePath });
       await onUpdate();
       showMsg('头像已更新');
@@ -80,6 +83,7 @@ export function SettingsApp({
       showMsg((err as Error).message);
     } finally {
       setUploadingAvatar(false);
+      setUploadPct(null);
       e.target.value = '';
     }
   };
@@ -190,7 +194,6 @@ export function SettingsApp({
               <div style={{ position: 'relative' }}>
                 <button
                   onClick={() => setShowAvatarMenu(v => !v)}
-                  disabled={uploadingAvatar || generatingAvatar}
                   style={{ width: 56, height: 56, borderRadius: 12, cursor: 'pointer', background: 'var(--card-bg-hover)', border: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text)', overflow: 'hidden', padding: 0, fontFamily: 'inherit' }}
                 >
                   {player.avatar ? (
@@ -204,11 +207,11 @@ export function SettingsApp({
                 )}
                 {showAvatarMenu && (
                   <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, zIndex: 20, background: 'var(--panel)', border: '1px solid var(--border-soft)', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.25)', padding: '4px 0', minWidth: 132 }}>
-                    <button onClick={() => { setShowAvatarMenu(false); fileInputRef.current?.click(); }} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
-                      🖼 上传图片
+                    <button onClick={() => { setShowAvatarMenu(false); fileInputRef.current?.click(); }} disabled={uploadingAvatar} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', opacity: uploadingAvatar ? 0.5 : 1 }}>
+                      🖼 {uploadingAvatar ? '上传中…' : '上传图片'}
                     </button>
                     {canGenerate && (
-                      <button onClick={handleGenerateAvatar} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                      <button onClick={handleGenerateAvatar} disabled={generatingAvatar} style={{ display: 'block', width: '100%', padding: '0.45rem 0.7rem', textAlign: 'left', fontSize: '0.8rem', color: 'var(--text)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', opacity: generatingAvatar ? 0.5 : 1 }}>
                         🎨 {generatingAvatar ? '生成中…' : '生成图片'}
                       </button>
                     )}
@@ -225,6 +228,7 @@ export function SettingsApp({
               </div>
             </div>
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleAvatarFile} style={{ display: 'none' }} />
+            <UploadProgressBar progress={uploadPct} />
 
             {(generatingAvatar || pendingAvatar) && (
               <div style={{ padding: '0.7rem', border: '1px solid var(--border-soft)', borderRadius: 10, background: 'var(--card-bg-alt)' }}>

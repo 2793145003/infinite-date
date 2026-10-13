@@ -9,6 +9,7 @@ import { DEITY_ID } from '@idate/shared';
 import { db } from '../db';
 import { getLocationPath } from '../routes/location';
 import { config } from '../config';
+import { EMOTION_SCHEMA, EMOTION_OUTPUT_RULE, normalizeEmotions } from '../lib/emotion';
 
 /**
  * vLLM guided_json schema — 从源头约束LLM输出合法JSON
@@ -26,7 +27,12 @@ export const REPLY_SCHEMA = {
     need_search: { type: 'boolean' },
     search_query: { type: 'string' },
     image_prompt: { type: 'string' },
+    // 心绪（可选）：REPLY_SCHEMA 被约会聊天/剧本/梦境共用，那些路径不注入输出说明，
+    // 实测「可选字段 + 无说明」行为与基线完全一致（不会灌空白截断）；
+    // 只有短信路径注入 EMOTION_OUTPUT_RULE 并取用该字段。详见 src/lib/emotion.ts
+    emotions: EMOTION_SCHEMA,
   },
+  // 注意：emotions 刻意**不放进 required** —— 见上方说明
   required: ['messages', 'internal', 'internal_notable', 'player_description', 'scene_concluded'],
 };
 
@@ -46,6 +52,7 @@ export interface PromptContext {
   currentTime?: string; // 当前时间（日期+时段）
   relationshipDuration?: string; // 认识多久（"3天前初次相遇"等）
   situationalNote?: string; // 情境注脚（可选，如"被吵醒"），追加在 system prompt 末尾
+  emotionsEnabled?: boolean; // 是否启用心绪输出说明（仅短信路径；约会聊天/剧本不启用）
 }
 
 /**
@@ -166,8 +173,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     message_rule: messageRule,
     image_gen_instruction: imageGenInstruction,
   });
-  if (ctx.situationalNote) return rendered + '\n\n' + ctx.situationalNote;
-  return rendered;
+  const withNote = ctx.situationalNote ? rendered + '\n\n' + ctx.situationalNote : rendered;
+  // 心绪输出说明：必须与实际取用 emotions 的路径成对出现，缺了它模型不会输出该字段
+  return ctx.emotionsEnabled ? withNote + '\n\n' + EMOTION_OUTPUT_RULE : withNote;
 }
 
 /**
@@ -252,8 +260,10 @@ export async function generateReply(
   });
 
   const parsed = tryParseJsonReply(result.content);
-  if (parsed && typeof parsed.messages !== 'undefined') {
-    const reply = normalizeReply(parsed);
+  const parsedReply = parsed && typeof parsed.messages !== 'undefined' ? normalizeReply(parsed) : null;
+  // 过滤后一句真正的台词都没有（例如输出被截断成 JSON 碎片）→ 不当成成功，落到下一层防御
+  if (parsedReply && parsedReply.messages.length > 0) {
+    const reply = parsedReply;
     // 复述检测：如果 NPC 回复逐字复述了玩家的话，带提示重试一次
     if (playerInput && _isEchoingPlayer(reply.messages, playerInput)) {
       const echoRetryMessages = [...messages, {
@@ -293,7 +303,8 @@ export async function generateReply(
   });
   const retryParsed = tryParseJsonReply(retryResult.content);
   if (retryParsed && typeof retryParsed.messages !== 'undefined') {
-    return normalizeReply(retryParsed);
+    const retryReply = normalizeReply(retryParsed);
+    if (retryReply.messages.length > 0) return retryReply;
   }
 
   // 第三层防御：从损坏的JSON中抢救消息文本
@@ -303,7 +314,10 @@ export async function generateReply(
   }
 
   // 最终fallback：纯文本（已经过 cleanMessageText 清洗）
-  const fallbackText = cleanMessageText(result.content || retryResult.content || '……');
+  const rawText = result.content || retryResult.content || '';
+  // 明显是 JSON 残留就不要当台词展示——宁可用省略号占位，也不把字段名/括号甩到玩家眼前
+  const looksLikeJson = /^\s*[[{]/.test(rawText) || rawText.includes('"messages"');
+  const fallbackText = looksLikeJson ? '' : cleanMessageText(rawText);
   return {
     messages: [fallbackText || '……'],
     internal: '',
@@ -445,8 +459,16 @@ function formatBackstoryMilestones(char: CharacterData): string {
 }
 
 function normalizeReply(raw: Record<string, unknown>): LlmStructuredReply {
+  // 过滤 JSON 结构碎片（字段名/括号/关键字）——即便是 JSON.parse 成功的输出，
+  // 也可能因为模型把字段名塞进 messages 而出现脏台词（见 isJsonFragmentText）
+  const rawMsgs = Array.isArray(raw.messages)
+    ? (raw.messages as unknown[]).map(s => String(s))
+    : [String(raw.messages ?? '')];
+  const cleanedMsgs = rawMsgs
+    .map(s => cleanMessageText(s))
+    .filter(s => s && !isJsonFragmentText(s));
   return {
-    messages: Array.isArray(raw.messages) ? (raw.messages as string[]).map(s => cleanMessageText(String(s))) : [cleanMessageText(String(raw.messages ?? '……'))],
+    messages: cleanedMsgs,
     internal: cleanMessageText(String(raw.internal ?? '')),
     internal_notable: Boolean(raw.internal_notable),
     player_description: String(raw.player_description ?? ''),
@@ -455,6 +477,8 @@ function normalizeReply(raw: Record<string, unknown>): LlmStructuredReply {
     need_search: Boolean(raw.need_search),
     search_query: raw.search_query ? String(raw.search_query).trim() : '',
     image_prompt: raw.image_prompt ? String(raw.image_prompt).trim() : '',
+    // 仅当 8 键齐全且为合法数字时才保留，否则视为未给出（不影响主流程）
+    emotions: normalizeEmotions(raw.emotions) ?? undefined,
   };
 }
 
@@ -522,31 +546,109 @@ function fixUnbalancedParens(t: string): string {
  * 策略：用正则提取 "messages" 字段后的字符串值，
  * 即使整体JSON有语法错误（未转义引号、尾逗号等）也能工作。
  */
-function salvageMessagesFromText(raw: string): LlmStructuredReply | null {
+/** 回复 JSON 的字段名——它们一旦被当成台词存库就是脏数据（2026-09-18 实测出现过） */
+const REPLY_FIELD_NAMES = new Set([
+  'messages', 'message', 'internal', 'internal_notable', 'player_description', 'scene_concluded',
+  'current_location', 'need_search', 'search_query', 'image_prompt', 'environment', 'quest_npc_line',
+  'item_obtained', 'rating', 'speaker', 'text', 'internals', 'player_descriptions',
+]);
+
+/**
+ * 判断一段文本是不是 JSON 结构碎片（字段名 / 括号逗号 / null|false / 单个 ASCII 词）。
+ * 这类文本绝不能当台词——2026-09-18 排查发现 8 条这样的脏数据进了 messages 表
+ * （如 `'],`、`internal_notable`、`player_description`、`null`、`false`）。
+ */
+export function isJsonFragmentText(s: string): boolean {
+  const t = s.trim();
+  if (!t) return true;
+  if (/^[[\]{},:"'\s\\]*$/.test(t)) return true; // 纯括号/逗号/引号
+  if (/^(true|false|null|undefined)$/i.test(t)) return true; // JSON 关键字
+  if (REPLY_FIELD_NAMES.has(t.toLowerCase())) return true; // 字段名原文
+  if (/^[a-z_]{3,40}$/i.test(t) && t.includes('_')) return true; // snake_case 字段名
+  // 单个 ASCII/谚文“词”（无中文、无空格、无标点）——如 internal히
+  if (/^[0-9A-Za-z\uAC00-\uD7A3]+$/.test(t) && t.length <= 40) return true;
+  return false;
+}
+
+/**
+ * 从 bracketIdx 处的 '[' 开始，按字符串/转义状态扫描到配对的 ']'。
+ * 输出被截断（数组未闭合）时返回到文本末尾——由调用方按台词过滤兜住。
+ */
+function readBalancedArray(raw: string, bracketIdx: number): string {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = bracketIdx; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) return raw.slice(bracketIdx + 1, i);
+    }
+  }
+  return raw.slice(bracketIdx + 1);
+}
+
+/**
+ * 提取 region 内的 JSON 字符串，遇到「字段名」就停下。
+ *
+ * 为什么是停下而不是跳过：`"messages"` 数组没闭合（输出被截断）时，region 会一直延伸到
+ * 后面的字段上；第一个后面紧跟冒号的字符串就是数组的终点，再往后全是
+ * `"internal": …` / `"player_description": …` 这种字段——它们绝不能当台词。
+ */
+function extractArrayStrings(region: string): string[] {
+  const out: string[] = [];
+  const re = /"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(region)) !== null) {
+    const value = m[1] ?? '';
+    if (!value) continue;
+    if (/^\s*:/.test(region.slice(re.lastIndex))) break; // 字段名 → 数组到头了
+    out.push(value.replace(/\\"/g, '"').replace(/\\n/g, '\n'));
+  }
+  return out;
+}
+
+export function salvageMessagesFromText(raw: string): LlmStructuredReply | null {
   if (!raw) return null;
 
-  // 尝试提取 messages 数组中的字符串
-  // 匹配 "messages": ["...", "..."] 或 "messages":["..."]
-  const msgPattern = /"messages"\s*:\s*\[([\s\S]*?)\]/;
-  const msgMatch = raw.match(msgPattern);
+  // 定位 "messages" 数组，并按**括号配对**（而不是第一个 ]）界定范围：
+  // 旧实现用非贪婪 .*? 到第一个 ]，输出被截断时会一路吃到后面的字段，
+  // 把 internal / player_description / item_obtained 等字段名和值全当成台词存库。
   const messages: string[] = [];
-
-  if (msgMatch?.[1]) {
-    // 逐个提取引号内的字符串
-    // 匹配 "..." 但处理转义引号 — 匹配到未被转义引号关闭为止
-    const stringPattern = /"((?:[^"\\]|\\.)*)"/g;
-    let m: RegExpExecArray | null;
-    while ((m = stringPattern.exec(msgMatch[1])) !== null) {
-      if (!m[1]) continue;
-      messages.push(cleanMessageText(m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n')));
+  const msgKeyIdx = raw.search(/"messages"\s*:\s*\[/);
+  if (msgKeyIdx >= 0) {
+    const bracketIdx = raw.indexOf('[', msgKeyIdx);
+    const region = readBalancedArray(raw, bracketIdx);
+    for (const s of extractArrayStrings(region)) {
+      const cleaned = cleanMessageText(s);
+      if (!cleaned || isJsonFragmentText(cleaned)) continue;
+      messages.push(cleaned);
     }
   }
 
-  // 如果没提取到 messages，尝试提取 "message" 单字段（creation路由格式）
+  // 如果没提取到 messages（数组形态），尝试 messages 直接是字符串的形态
+  if (messages.length === 0) {
+    const strMsg = raw.match(/"messages"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (strMsg?.[1]) {
+      const cleaned = cleanMessageText(strMsg[1].replace(/\\"/g, '"').replace(/\\n/g, '\n'));
+      if (cleaned && !isJsonFragmentText(cleaned)) messages.push(cleaned);
+    }
+  }
+
+  // 再退一步：尝试提取 "message" 单字段（creation路由格式）
   if (messages.length === 0) {
     const singleMsg = raw.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
     if (singleMsg?.[1]) {
-      messages.push(cleanMessageText(singleMsg[1].replace(/\\"/g, '"').replace(/\\n/g, '\n')));
+      const cleaned = cleanMessageText(singleMsg[1].replace(/\\"/g, '"').replace(/\\n/g, '\n'));
+      if (cleaned && !isJsonFragmentText(cleaned)) messages.push(cleaned);
     }
   }
 

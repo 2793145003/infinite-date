@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus, Trash2, Globe, Globe2, Heart, X, Send, RotateCcw } from 'lucide-react';
-import { api, imageUrl, type PlaneCharacter, type PlanePoolItem, type PlaneSessionSummary } from '../lib/api';
+import { api, imageUrl, type UploadProgress, type PlaneCharacter, type PlanePoolItem, type PlaneSessionSummary } from '../lib/api';
 import { CapsuleField } from './CapsuleField';
+import { UploadProgressBar } from './UploadProgressBar';
 import { toLine, beatToLine, renderText, sleep, type Bubble } from '../lib/plane-chat-utils';
 
 /**
@@ -1313,6 +1314,7 @@ const CharacterFormModal: React.FC<{
   const [rolling, setRolling] = useState(false);
   const [rolls, setRolls] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState<UploadProgress | null>(null);
   const [generating, setGenerating] = useState(false);
   const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
   const [err, setErr] = useState('');
@@ -1418,13 +1420,15 @@ const CharacterFormModal: React.FC<{
   const upload = async (file: File) => {
     setUploading(true);
     setErr('');
+    setUploadPct({ phase: 'compress', pct: 0 });
     try {
-      const r = await api.uploadImage(file);
+      const r = await api.uploadImage(file, { compress: true, onProgress: setUploadPct });
       set('avatar', r.imagePath);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setUploading(false);
+      setUploadPct(null);
     }
   };
 
@@ -1518,14 +1522,14 @@ const CharacterFormModal: React.FC<{
             <div className="flex gap-1.5">
               <button
                 onClick={() => fileRef.current?.click()}
-                disabled={uploading || generating}
+                disabled={uploading}
                 className="px-3 py-1.5 rounded-lg bg-bg-muted border border-border text-[12px] text-ink font-medium hover:bg-bg-soft transition cursor-pointer disabled:opacity-50"
               >
                 {uploading ? '上传中…' : '上传角色图'}
               </button>
               <button
                 onClick={generate}
-                disabled={generating || uploading}
+                disabled={generating}
                 className="px-3 py-1.5 rounded-lg bg-bg-muted border border-border text-[12px] text-ink font-medium hover:bg-bg-soft transition cursor-pointer disabled:opacity-50"
               >
                 {generating ? '生成中…' : '生成角色图'}
@@ -1543,6 +1547,7 @@ const CharacterFormModal: React.FC<{
                 e.target.value = '';
               }}
             />
+            <UploadProgressBar progress={uploadPct} className="mt-0" />
           </div>
         </div>
 

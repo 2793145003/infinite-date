@@ -20,6 +20,9 @@ infinite-date-v2/
 │   │       │   └── schema.ts    # 全部建表 SQL（SCHEMA_SQL 常量）
 │   │       ├── routes/          # API 路由（每个文件导出 xxxRoutes(app)）
 │   │       ├── lib/             # 后端业务逻辑
+│   │       ├── world/           # 衍生世界引擎（实验功能，已冻结 → docs/DERIVATIVE_WORLD.md）
+│   │       ├── farm/            # 共享菜园（种植+料理，实验功能 → docs/FARM_COOKING_DESIGN.md）
+│   │       ├── qq-bridge/       # QQ 桥（短信接 QQ 官方机器人 → src/qq-bridge/README.md）
 │   │       ├── llm/
 │   │       │   └── adapter.ts   # vLLM 调用 + chatJson + JSON 解析
 │   │       └── prompt/
@@ -101,6 +104,7 @@ infinite-date-v2/
 | `plane-wiring.ts` | 85 | **位面崽身份读取层**。从 plane_characters 读名字/角色卡，供 scene-wiring 的 scene_type='plane' 分支注入（替代 getCharacterName/buildCharacterCard）。summary 对外不进 prompt，persona 对内进 prompt（空则复制 summary） | `getPlaneCharacter`, `getPlaneCharacterName`, `normalizePlaneTokens`, `expandPlaneText`, `buildPlaneCharacterCard` |
 | `plane-playcount.ts` | 28 | **位面委托次数（play_count）计数**。玩家真正说过话才计一次，每会话只计一次；纯函数便于离线单测（不 import db） | `bumpPlanePlayCountIfFirstTalk` |
 | `util.ts` | 20 | 通用工具 | `genId`, `now`, `jsonParse` |
+| `match2.ts` | 307 | **二消小游戏引擎（通用版）**。块定义参数化（`TileSet`：块/分值/权重/清行列块）；修仙盘面数据在 `world/match2.ts` 兼容层，料理盘面在 `farm/kitchen.ts`。含贪心玩法与 `calibrateTiers()` | `newBoard`, `trySwap`, `findMatches`, `greedyPlay`, `qualityFromScore`, `calibrateTiers` |
 
 ---
 
@@ -244,6 +248,83 @@ infinite-date-v2/
 | | DELETE | `/plane/sessions/:sessionId` | 删除会话 |
 | | GET | `/plane/sessions/:sessionId` | 读会话 |
 | | GET | `/plane/sessions` | 会话列表（进行中 + 历史） |
+
+### 衍生世界（world.ts，实验功能，⏸️ 已冻结）
+
+| 文件 | Method | Path | 功能 |
+|---|---|---|---|
+| **world.ts** | POST | `/world` | 创建衍生世界（name/seed/npcCount/regions/cells） |
+| | GET | `/world` | 我的世界列表 |
+| | GET | `/world/:id/state` | 世界状态（地图/玩家/NPC/事件） |
+| | POST | `/world/:id/advance` | 推进 N 月（休息跳月/闭关） |
+| | POST | `/world/:id/move` | 走格子（移动 + 相遇升格） |
+| | POST | `/world/:id/talk` | 与 NPC 对话（LLM 懒加载人设卡 + 多轮） |
+| | POST | `/world/:id/craft/start` | 开始炼制（生成二消盘面） |
+| | POST | `/world/:id/craft/swap` | 二消交换（纯函数，无状态） |
+| | POST | `/world/:id/craft/finish` | 炼制结算（出成品） |
+| | DELETE | `/world/:id` | 删除世界 |
+
+引擎在 `apps/server/src/world/`（16 文件 2202 行，含离线 runner）；详见 **DERIVATIVE_WORLD.md**。
+
+---
+
+### 共享菜园（farm/，实验功能，P1+P2 骨架）
+
+种植 + 料理。**还没接路由/表/前端**（下一步），当前是纯逻辑层 + 离线验证。
+
+| 文件 | 行数 | 作用 | 关键导出 |
+|---|---|---|---|
+| `src/farm/crops.ts` | 117 | 作物表（生活向 10 种 2h~24h + 奇幻专属 6 种）+ 掉率 + 专属作物规则 | `CROPS`, `EXCLUSIVE_CROPS`, `exclusiveCropFor`, `SEED_*` |
+| `src/farm/growth.ts` | 94 | 生长（现实时间/浇水只加速 10%/**不枯死不减产**） | `plant`, `ripeAt`, `stageOf`, `water`, `harvest` |
+| `src/farm/steal.ts` | 81 | 偷菜规则（只玩家偷男主/他在家不好下手/每茬一次/每天一次/约 1/3）+ 失窃台账 | `canSteal`, `steal`, `ledger` |
+| `src/farm/reaction.ts` | 90 | 被偷之后：性格四档 + 事实文本（**不含"是谁"**）+ 按行程概率发朋友圈 + 禁词与兜底 | `temperamentOf`, `stolenHint`, `shouldPostOnScheduleChange`, `FORBIDDEN_WORDS` |
+| `src/farm/context.ts` | 69 | 临时上下文（成熟/被偷/收到菜 → 有保质期的状态；**说不说看角色自己**） | `makeNote`, `makeRipeNote`, `noteInjection` |
+| `src/farm/kitchen.ts` | 210 | 料理盘面（8 块，与修仙同权重）+ 形态规则 + 意象词 + 品质阈值（250/320/430）+ 编菜 prompt/schema | `KITCHEN_SET`, `cookBoard`, `dishBrief`, `buildDishPrompt`, `DISH_SCHEMA` |
+| `src/farm/rng.ts` | 30 | 自带 mulberry32（农场不依赖 world 模块） | `makeRng`, `pick`, `chance` |
+| `src/farm/runner.ts` | 113 | 离线跑完整循环（种→熟→收→偷→文案→上下文→料理→prompt 预览） | — |
+
+验证：`npx tsx src/farm/runner.ts 2026`（纯规则）、`npx tsx verify_farm_llm.ts 3`（模型文案，只读库）。
+单测：`src/test/farm.test.ts`（37 例）、`src/test/match2-params.test.ts`（引擎参数化回归 6 例）。详见 **FARM_COOKING_DESIGN.md**。
+
+---
+
+### QQ 桥（qq-bridge，短信接 QQ 官方机器人，2026-10-13）
+
+男主的短信推到玩家手机 QQ 锁屏通知；玩家在 QQ 里回一句，落到同一条 thread。
+**独立进程、只读轮询、表自建**，主服务不感知。设计取舍/隔离性/并发防护见 `src/qq-bridge/README.md`。
+
+| 文件 | 行数 | 作用 | 关键导出 |
+|---|---|---|---|
+| `src/qq-bridge/bridge.ts` | 369 | 出站/入站核心循环：幂等 claim、限流、被动回复窗口、msg_seq 自愈、入站护栏 | `runOutboundOnce`, `handleInbound` |
+| `src/qq-bridge/qq-api.ts` | 334 | QQ 官方 v2 API 客户端（Node 内置 fetch/WebSocket，零第三方依赖） | `sendC2C`, `uploadRichMedia`, `startGateway` |
+| `src/qq-bridge/main.ts` | 219 | 桥进程入口：pid 文件、出站循环（**含重入锁**）、60s 扫新绑定接网关 | — |
+| `src/qq-bridge/replay.ts` | 189 | 出站内容规则离线回放（只读真实历史库，断言「心声不外发/无约会邀请/只有 NPC 消息/pending 图不发」） | — |
+| `src/qq-bridge/qr-session.ts` | 174 | 扫码会话（把 SDK 的 `startQrConnect` 轮询循环包成可查询会话） | `startQrSession`, `pollQrSession` |
+| `src/qq-bridge/reader.ts` | 141 | 只读数据访问：`sinceTs` 时间切流 / `onlyUnsent` 幂等过滤 / 回放用 DESC | `readSmsRows` |
+| `src/qq-bridge/probe-gateway.ts` | 112 | 打印网关**原始帧**的探针（定位事件名 bug 用的，留着排查） | — |
+| `src/qq-bridge/schema.ts` | 98 | 三张 `qq_*` 表的建表 + 判存补列迁移（**不进 db/schema.ts**） | `ensureQqSchema` |
+| `src/qq-bridge/payload.ts` | 98 | 纯函数出站内容规则（只连 `text_messages` `sender='npc'`；`internal` 不进类型） | `buildOutbound` |
+| `src/qq-bridge/bind.ts` | 98 | 绑定落库（扫码/手填统一入口）、`since_ts` 设定、`listBindings` | `bindManual`, `listBindings` |
+| `src/qq-bridge/crypto.ts` | 43 | AppSecret 对称加密（密钥 `IDATE_QQ_SECRET_KEY`，未配置拒绝启动） | `encryptSecret`, `decryptSecret` |
+| `src/qq-bridge/make-demo-db.ts` | 48 | 用只读 ATTACH 从生产库拷表造演示库 | — |
+| `src/qq-bridge/verify-isolation.ts` | 310 | 隔离验证 22 项（两个玩家绑**同一个男主**、陌生人顶 openid、跨玩家抢同一机器人、限流不互相挤占） | — |
+| `src/qq-bridge/verify-routes.ts` | 154 | 绑定接口离线验证 12 项（fastify `inject()`，不占端口） | — |
+| `src/qq-bridge/verify-concurrency.ts` | 100 | 并发重入验证（两轮出站同时跑，断言不重复投递） | — |
+| `src/qq-bridge/verify-card-anchors.ts` | 91 | 角色卡时段锚点校验（示例场景里不许写死「深夜」，只留【当前场景】一个时间来源） | — |
+| `src/routes/qq-bridge.ts` | 194 | 绑定/解绑/查状态 + `POST /qq/welcome/:characterId` | `qqBridgeRoutes` |
+| `src/test/qq-bridge-payload.test.ts` | 78 | 出站内容规则单测（9 例） | — |
+
+跑法（都不碰生产库、不占端口）：
+```bash
+cd apps/server
+npx tsx src/qq-bridge/verify-routes.ts        # 绑定接口 12 项
+npx tsx src/qq-bridge/verify-isolation.ts     # 隔离 22 项
+npx tsx src/qq-bridge/verify-concurrency.ts   # 并发不重复
+npx tsx src/qq-bridge/verify-card-anchors.ts  # 角色卡时段锚点
+npx tsx src/qq-bridge/replay.ts --limit 300   # 出站规则回放（只读）
+```
+
+---
 
 ### 其他
 
@@ -628,6 +709,7 @@ moment-scheduler.ts (5min tick)
 | | `player_llm_configs` | per-player LLM 配置（base_url/api_key/model，未填回落 env） |
 | **互动小说** | `novels` / `novel_characters` / `novel_sessions` / `novel_turns` | 共写引擎（小说/简单人设角色/故事线多周目/段落）。完全隔离于约会体系，不进 characters/行程/朋友圈 |
 | **位面任务** | `plane_characters` | 位面崽（UGC 公共池，独立数据模型）。会话/消息复用 scene_sessions/scene_messages（scene_type='plane' + plane_character_id 列） |
+| **衍生世界** | `derivative_worlds` | 修仙世界存档：一玩家一档，整个 WorldEngine 快照（tick/npcs/events/map/player/rngState）序列化进 `save_data`，对话历史单独存 `chat_history`。实验功能，已冻结 → DERIVATIVE_WORLD.md |
 
 ---
 
@@ -671,6 +753,8 @@ moment-scheduler.ts (5min tick)
 | **MISSION_DESIGN.md** | 任务系统设计 |
 | **HEXAGRAM_MISSION_DESIGN.md** | 卦象任务设计（世界任务已下线，位面任务替代） |
 | **PLANE_MISSION_DESIGN.md** | 位面任务系统设计（已上线） |
+| **DERIVATIVE_WORLD.md** | 衍生世界（修仙程序化演化）文档 —— ⏸️ 已冻结：设计基石/玩法闭环/代码索引/怎么跑/可复用资产 |
+| **FARM_COOKING_DESIGN.md** | 种植 + 料理系统设计（暂名「小院」，待拍板）：三铁律/核心循环/与现有系统全部接点/数据模型草案/分期落地 |
 | **NPC_TASK_DESIGN.md** / **NPC_TASK_IMPL.md** | NPC 任务设计 / 实现（入口已下线） |
 | **GROUP_CHAT_DESIGN.md** | 群聊设计 |
 | **MEDIA_BACKGROUND_DESIGN.md** | 媒体/背景图系统 |

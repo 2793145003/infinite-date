@@ -913,6 +913,7 @@ infinite-date/
 | AI 生图 | lib/ai-image.ts + 独立容器 Krea 2 | gemma 扩写英文 prompt → Krea 2 出图；头像按性别锚定，配图 gemma 当摄影师判 has_person/has_face |
 | 首页每日寄语 | lib/home-poem.ts + routes/home-poem.ts | 按角色每日一句（场景锚 + 关系现状） |
 | NPC 任务 | lib/npc-task.ts + lib/npc-mission.ts | NPC 主动邀请（好友+空档段触发），同行 coop / NPC 独自完成 solo，温馨向 |
+| 衍生世界（实验） | routes/world.ts + src/world/ | 修仙程序化世界演化（五行生克驱动 tick + 遇见的才升格走 LLM + 二消炼制）。⏸️ **已冻结**（判定不好玩），入口在实验功能区，文档 docs/DERIVATIVE_WORLD.md |
 | 错误处理 | index.ts | 4xx返回具体message，5xx只返回通用提示 |
 
 ### 4.4 运行环境

@@ -4,7 +4,8 @@ import React from 'react';
 export const ExperimentalApp: React.FC<{
   onBack: () => void;
   onOpenNovels: () => void;
-}> = ({ onBack, onOpenNovels }) => {
+  onOpenWorld: () => void;
+}> = ({ onBack, onOpenNovels, onOpenWorld }) => {
   return (
     <div className="id-app">
       <div className="id-appbar">
@@ -22,6 +23,14 @@ export const ExperimentalApp: React.FC<{
             >
               📖 互动小说
               <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: 'var(--text-mute)' }}>穿越位面，书写无限流故事 ›</span>
+            </button>
+            <button
+              className="id-btn sm"
+              style={{ width: '100%', justifyContent: 'flex-start' }}
+              onClick={onOpenWorld}
+            >
+              ⛰️ 衍生世界
+              <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: 'var(--text-mute)' }}>修仙界演化，遇见的才活过来 ›</span>
             </button>
           </div>
         </div>

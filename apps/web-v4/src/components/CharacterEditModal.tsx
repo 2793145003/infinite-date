@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, imageUrl } from '../lib/api';
+import { api, imageUrl, type UploadProgress } from '../lib/api';
 import { ImageViewer } from './ImageViewer';
 import { CapsuleField } from './CapsuleField';
+import { UploadProgressBar } from './UploadProgressBar';
 
 type Draft = Record<string, any>;
 
@@ -59,6 +60,7 @@ export function CharacterEditModal({
   const [msg, setMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadPct, setUploadPct] = useState<UploadProgress | null>(null);
   const [generatingAvatar, setGeneratingAvatar] = useState(false);
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
@@ -132,13 +134,15 @@ export function CharacterEditModal({
     if (!file) return;
     setShowAvatarMenu(false);
     setUploadingAvatar(true);
+    setUploadPct({ phase: 'compress', pct: 0 });
     try {
-      const res = await api.uploadImage(file);
+      const res = await api.uploadImage(file, { compress: true, onProgress: setUploadPct });
       upd('avatar', res.imagePath);
     } catch (err) {
       showMsg((err as Error).message);
     } finally {
       setUploadingAvatar(false);
+      setUploadPct(null);
       e.target.value = '';
     }
   };
@@ -224,7 +228,6 @@ export function CharacterEditModal({
                     <button
                       type="button"
                       onClick={() => setShowAvatarMenu((v) => !v)}
-                      disabled={uploadingAvatar || generatingAvatar}
                       className="w-16 h-16 rounded-xl bg-bg-muted/90 hover:bg-bg-muted-2/80 border border-border-strong flex flex-col items-center justify-center text-ink transition shadow-2xs disabled:opacity-50"
                     >
                       {draft.avatar ? (
@@ -246,15 +249,17 @@ export function CharacterEditModal({
                         <button
                           type="button"
                           onClick={() => { setShowAvatarMenu(false); fileInputRef.current?.click(); }}
-                          className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition"
+                          disabled={uploadingAvatar}
+                          className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition disabled:opacity-50"
                         >
-                          <span>🖼</span>上传图片
+                          <span>🖼</span>{uploadingAvatar ? '上传中…' : '上传图片'}
                         </button>
                         {canGenerate && (
                           <button
                             type="button"
                             onClick={handleGenerateAvatar}
-                            className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition"
+                            disabled={generatingAvatar}
+                            className="w-full px-3 py-2 text-left text-xs text-ink hover:bg-bg-soft flex items-center gap-2 transition disabled:opacity-50"
                           >
                             <span>🎨</span>{generatingAvatar ? '生成中…' : '生成图片'}
                           </button>
@@ -272,7 +277,7 @@ export function CharacterEditModal({
                     )}
                   </div>
                   <div className="flex-1 text-[11px] text-ink-muted leading-relaxed">
-                    上传本地图片，或点「＋」选「生成图片」按外貌生成。留空则用角色名首字作头像。
+                    上传本地图片（大图会自动压缩后再传），或点「＋」选「生成图片」按外貌生成。留空则用角色名首字作头像。
                   </div>
                 </div>
                 <input
@@ -283,6 +288,7 @@ export function CharacterEditModal({
                   className="hidden"
                 />
                 {canDiff && <DiffHint original={orig('avatar')} current={draft.avatar} />}
+                <UploadProgressBar progress={uploadPct} />
 
                 {/* 生成头像独立框：生成中显示 loading，完成显示大图 + 替换/再次生成 */}
                 {(generatingAvatar || pendingAvatar) && (

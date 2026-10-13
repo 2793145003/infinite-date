@@ -43,6 +43,14 @@ __pycache__/
 # 数据备份（含玩家邮箱等敏感信息，勿提交）
 backup_*.csv
 
-/docs/v3-archive
+# 运行时备份：环境变量备份里含 LLM_API_KEY / COOKIE_SECRET 等密钥，绝不能进仓库
+.runtime-backups/
+idate_env.sh.bak*
+# 注：*.bak 匹配不到 idate_env.sh.bak-<时间戳> 这种「.bak 在中间」的名字，上面单独兜一层
+
 # 归档的死代码（AB/实验/一次性脚本、v2 旧前端等，不需要开源，git 历史可追溯）
 archive/
+.wheels/
+
+# 农场料理 AB 的原始输出（同 fact-clean-out）
+apps/server/scripts/ab-farm-cook-out/

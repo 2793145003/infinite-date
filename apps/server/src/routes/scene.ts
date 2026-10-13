@@ -475,6 +475,13 @@ export async function sceneRoutes(app: FastifyInstance): Promise<void> {
           });
         },
       });
+      // 幂等命中（窗口内重复发言，通常是响应丢失后用户手动重发）：
+      // 本轮没有落库也没有生成，只通知前端「重载场景」，不要追加新内容
+      if (result.duplicate) {
+        send({ type: 'done', duplicate: true, sessionId: result.sessionId, round: result.roundNo });
+        raw.end();
+        return;
+      }
       // mission 场景补 goal 判定（约会场景不判「任务完成」）
       const missionGoal = await judgeMissionGoalIfNeeded(sessionId, playerId, body.message ?? '', result.output);
       send({

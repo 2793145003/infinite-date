@@ -1,6 +1,8 @@
 import React from 'react';
-import { ChevronLeft, Plus, Upload, Search, Edit3, MessageCircle, Check, Trash2, UserMinus, RotateCcw } from 'lucide-react';
+import { ChevronLeft, Plus, Upload, Search, Edit3, MessageCircle, Check, Trash2, UserMinus, RotateCcw, QrCode } from 'lucide-react';
 import { Character } from '../types';
+import { request } from '../lib/api';
+import { QqBindModal } from './QqBindModal';
 
 interface CharacterArchiveScreenProps {
   characters: Character[];
@@ -33,6 +35,25 @@ export const CharacterArchiveScreen: React.FC<CharacterArchiveScreenProps> = ({
   const [showImportModal, setShowImportModal] = React.useState(false);
   const [importJsonText, setImportJsonText] = React.useState('');
   const [importError, setImportError] = React.useState('');
+  // 正在配置 QQ 接入的角色（null = 弹窗关着）
+  const [qqCharacter, setQqCharacter] = React.useState<Character | null>(null);
+  // characterId → 是否已接入 QQ（卡片角落的按钮用它显示状态）
+  const [qqBound, setQqBound] = React.useState<Record<string, boolean>>({});
+
+  const refreshQqBindings = React.useCallback(async () => {
+    try {
+      const r = await request<{ bindings: Array<{ characterId: string; status: string }> }>('/qq/bindings');
+      const map: Record<string, boolean> = {};
+      for (const b of r.bindings) map[b.characterId] = b.status === 'active' || b.status === 'pending';
+      setQqBound(map);
+    } catch {
+      /* 没绑定过 / 接口不可用都不影响角色页正常使用 */
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshQqBindings();
+  }, [refreshQqBindings]);
 
   const filteredCharacters = characters
     .filter((c) =>
@@ -147,6 +168,23 @@ export const CharacterArchiveScreen: React.FC<CharacterArchiveScreenProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5">
+                  <button
+                    id={`btn-qq-bind-${char.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQqCharacter(char);
+                    }}
+                    className={`relative p-1 rounded-md transition cursor-pointer ${
+                      qqBound[char.id] ? 'text-ink' : 'text-ink-faint hover:text-ink'
+                    }`}
+                    aria-label="接入 QQ"
+                    title={qqBound[char.id] ? '已接入 QQ（点击管理）' : '让他在 QQ 里找你'}
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    {qqBound[char.id] && (
+                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-solid border border-bg-soft" />
+                    )}
+                  </button>
                   <span className="text-[10px] text-ink opacity-0 group-hover:opacity-100 transition">
                     编辑 →
                   </span>
@@ -332,6 +370,16 @@ export const CharacterArchiveScreen: React.FC<CharacterArchiveScreenProps> = ({
             </div>
           </div>
         </div>
+      )}
+      {/* 接入 QQ 弹窗（每个角色卡片右上角的二维码按钮打开） */}
+      {qqCharacter && (
+        <QqBindModal
+          characterId={qqCharacter.id}
+          characterName={qqCharacter.name}
+          characterAvatar={qqCharacter.avatarUrl}
+          onClose={() => setQqCharacter(null)}
+          onChanged={() => void refreshQqBindings()}
+        />
       )}
     </div>
   );

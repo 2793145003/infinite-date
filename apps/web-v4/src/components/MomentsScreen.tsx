@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ChevronLeft,
   Camera,
@@ -261,16 +261,33 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
   };
 
   // Submit Comment（走后端，操作后重拉）
+  //
+  // 幂等保护（2026-09-18 事故后加）：评论框是回车提交，而「按住回车 → keydown 自动重复」
+  // 或「点了没反应 → 用户连按」都会让一次操作变成多次请求；原先没有发送中锁、文本又要等
+  // 接口成功才清空，响应一旦丢失（实测只处理到 2/13 个响应）就会一直重发同一句，
+  // 服务端零判重 → 变成玩家刷屏 + NPC 逐条回复。这里做三道保护：
+  //   1) sendingRef 同步锁：请求返回前，同一条动态只允许发一次（不受 React 渲染时机影响）
+  //   2) 发出即清空输入框：立刻有反馈，也杜绝"同一句还被再发一次"
+  //   3) 15s 超时：评论接口是快接口（实测 ~100ms），响应丢了要报错还原文本，不能一直挂着
+  const sendingRef = useRef<Record<string, boolean>>({});
+  const [sendingCommentIds, setSendingCommentIds] = useState<Record<string, boolean>>({});
+
   const handleSendComment = async (postId: string) => {
     const text = commentInputs[postId]?.trim();
-    if (!text) return;
+    if (!text || sendingRef.current[postId]) return;
+    sendingRef.current[postId] = true;
+    setSendingCommentIds((prev) => ({ ...prev, [postId]: true }));
+    setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
     try {
-      await api.commentMoment(postId, text);
-      setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
+      await api.commentMoment(postId, text, AbortSignal.timeout(15_000));
       setActiveCommentPostId(null);
       await loadMoments();
     } catch (e) {
       console.error('评论失败', e);
+      setCommentInputs((prev) => ({ ...prev, [postId]: text })); // 失败把文本还回去，让她能重发
+    } finally {
+      sendingRef.current[postId] = false;
+      setSendingCommentIds((prev) => ({ ...prev, [postId]: false }));
     }
   };
 
@@ -586,13 +603,18 @@ export const MomentsScreen: React.FC<MomentsScreenProps> = ({
                           })
                         }
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSendComment(post.id);
+                          // 回车发送：必须跳过「按键自动重复」和「输入法组词中的回车」
+                          // （中文输入法用回车确认候选词，key 同样是 Enter；按住回车会持续重复 keydown）
+                          if (e.key !== 'Enter' || e.repeat || e.nativeEvent.isComposing) return;
+                          e.preventDefault();
+                          handleSendComment(post.id);
                         }}
                         className="flex-1 bg-bg-soft border border-border rounded-lg px-2.5 py-1 text-xs text-ink placeholder-ink-faint outline-none focus:border-border-dark"
                       />
                       <button
                         onClick={() => handleSendComment(post.id)}
-                        className="p-1.5 rounded-lg bg-solid text-solid-contrast hover:bg-solid-soft transition active:scale-95 cursor-pointer"
+                        disabled={!!sendingCommentIds[post.id]}
+                        className="p-1.5 rounded-lg bg-solid text-solid-contrast hover:bg-solid-soft transition active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-default"
                         title="发送评论"
                       >
                         <Send className="w-3 h-3" />

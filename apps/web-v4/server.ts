@@ -26,6 +26,17 @@ async function startServer() {
   app.use((req, res, next) => {
     if (!req.url.startsWith('/api/')) return next();
 
+    // 诊断日志：每次转发到后端的 API 请求打一行（→ /tmp/idate_webv4.log）
+    // 用途：区分「浏览器真的发了 N 次」还是「上游网关重放了 1 次」
+    {
+      const h = req.headers;
+      const s = (v: unknown, n = 60) => String(v ?? '').slice(0, n);
+      console.log(
+        `[proxy:3001->3000] ${new Date().toISOString()} ${req.method} ${req.url} ` +
+        `ua="${s(h['user-agent'])}" xff="${s(h['x-forwarded-for'], 40)}" ref="${s(h['referer'], 80)}"`
+      );
+    }
+
     // multipart 上传（图片等）：express.json 不消费它，body 仍是原始流。
     // 必须直接 pipe 给后端、保留 content-type（含 boundary）——若走下面的 JSON 序列化，
     // 文件二进制会被替换成 '{}'，后端 @fastify/multipart 报 "Unexpected end of multipart data"。

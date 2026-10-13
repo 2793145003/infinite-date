@@ -76,6 +76,12 @@ export async function sceneNamedRoutes(app: FastifyInstance): Promise<void> {
           });
         },
       });
+      // 幂等命中（窗口内重复发言）：本轮没有落库也没有生成，只让前端重载
+      if (result.duplicate) {
+        send({ type: 'done', duplicate: true, sessionId: result.sessionId, round: result.roundNo });
+        raw.end();
+        return;
+      }
       send({
         type: 'done',
         sessionId: result.sessionId,

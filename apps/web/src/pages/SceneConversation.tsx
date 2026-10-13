@@ -249,6 +249,17 @@ export function SceneConversation({
       setSending(true);
       setDirectorPlan(null);
       const done = await api.sceneAdvanceStream(sessionId, text, quote, async (b) => await appendBeat(b), (beats) => setDirectorPlan(beats));
+      // 幂等命中：服务端判定为窗口内重复发言（通常是响应丢失后重发），本轮没有新内容。
+      // 按后端真值重载列表，避免把重复发言/重复回复上屏。
+      if (done && (done as { duplicate?: boolean }).duplicate) {
+        try {
+          const data = await api.sceneGet(sessionId);
+          setLines(data.messages.map(toLine));
+          try { sessionStorage.setItem(sceneCacheKey(sessionId), JSON.stringify(data)); } catch { /* quota */ }
+        } catch { /* ignore */ }
+        setSending(false);
+        return;
+      }
       if (done && (done as any).locationName) setLocationName((done as any).locationName);
       if (done && (done as any).locationBackground) setBackground((done as any).locationBackground);
       setSending(false);
@@ -577,7 +588,7 @@ export function SceneConversation({
             // 每次输入即持久化草稿（问题2：切页回来不用重打）
             try { localStorage.setItem(inputDraftKey(sessionId), v); } catch { /* ignore */ }
           }}
-          onKeyDown={e => e.key === 'Enter' && handleSend()}
+          onKeyDown={(e) => { /* 回车发送：挡住按键自动重复与输入法组词中的回车 */ if (e.key === 'Enter' && !e.repeat && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend(); } }}
           placeholder="你想做什么？"
           disabled={sending}
         />

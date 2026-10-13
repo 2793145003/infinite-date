@@ -157,6 +157,9 @@ migration('scene_sessions_current_location_id', () => db.exec("ALTER TABLE scene
 // migration: scene_messages 加 quote 列（引用回复的 JSON：quoteId/quoteText/quoteSenderName）
 migration('scene_messages_quote', () => db.exec("ALTER TABLE scene_messages ADD COLUMN quote TEXT"));
 
+// migration: scene_messages 加 metadata 列（存该拍角色的八维心绪 emotions，供弹窗/历史曲线）
+migration('scene_messages_metadata', () => db.exec("ALTER TABLE scene_messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"));
+
 // migration: conversation_sessions 加 scenario_session_id 列（剧本会话关联）
 migration('conv_sessions_scenario_id', () => db.exec('ALTER TABLE conversation_sessions ADD COLUMN scenario_session_id TEXT'));
 

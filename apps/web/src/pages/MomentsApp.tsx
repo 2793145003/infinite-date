@@ -24,6 +24,7 @@ export function MomentsApp({ onBack }: { onBack: () => void }) {
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [commentingId, setCommentingId] = useState<string | null>(null);
   const [commentText, setCommentText] = useState('');
+  const [commentSending, setCommentSending] = useState(false);
 
   const loadMoments = useCallback(async () => {
     const reqId = ++loadMomentsReqId.current;
@@ -66,13 +67,19 @@ export function MomentsApp({ onBack }: { onBack: () => void }) {
   };
 
   const handleComment = async (momentId: string) => {
-    if (!commentText.trim()) return;
+    // 发送中锁 + 发出即清空：防连点/慢响应造成重复评论（2026-09-18 露露事故同款保护）
+    const text = commentText.trim();
+    if (!text || commentSending) return;
+    setCommentSending(true);
+    setCommentText('');
     try {
-      await api.commentMoment(momentId, commentText.trim());
-      setCommentText('');
+      await api.commentMoment(momentId, text);
       setCommentingId(null);
       await loadMoments();
-    } catch { /* ignore */ }
+    } catch {
+      setCommentText(text); // 失败把文本还回去
+    }
+    setCommentSending(false);
   };
 
   const handleDelete = async (momentId: string) => {
@@ -216,7 +223,7 @@ export function MomentsApp({ onBack }: { onBack: () => void }) {
                     <button
                       className="id-moment-comment-btn"
                       onClick={() => handleComment(m.id)}
-                      disabled={!commentText.trim()}
+                      disabled={!commentText.trim() || commentSending}
                     >
                       发送
                     </button>

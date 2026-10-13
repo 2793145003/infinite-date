@@ -960,7 +960,7 @@ function ChatView({ threadId, characterId, onBack, onNavigate }: { threadId: str
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              onKeyDown={(e) => { /* 回车发送：挡住按键自动重复与输入法组词中的回车 */ if (e.key === 'Enter' && !e.repeat && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend(); } }}
               placeholder={creationSession ? '描述你的角色…' : '输入消息…'}
               disabled={sending}
             />

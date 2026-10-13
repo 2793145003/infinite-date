@@ -29,6 +29,7 @@ import { SceneryViewScreen } from './components/SceneryViewScreen';
 import { MissionsApp } from './components/MissionsApp';
 import { PlaneApp } from './components/PlaneApp';
 import { ExperimentalApp } from './components/ExperimentalApp';
+import { DerivativeWorldApp } from './components/DerivativeWorldApp';
 import { ScenarioSceneList } from './components/ScenarioSceneList';
 import { ScenarioSceneDetail } from './components/ScenarioSceneDetail';
 import { ScenarioSceneApp } from './components/ScenarioSceneApp';
@@ -626,10 +627,13 @@ export default function App() {
             <ExperimentalApp
               onBack={() => setActiveTab('settings')}
               onOpenNovels={() => setActiveTab('novels')}
+              onOpenWorld={() => setActiveTab('world')}
             />
           )}
 
           {activeTab === 'plane' && <PlaneApp onBack={() => setActiveTab('home')} onModalChange={setPlaneModalOpen} onThinPaper={setPlaneThinPaper} />}
+
+          {activeTab === 'world' && <DerivativeWorldApp onBack={() => setActiveTab('experimental')} />}
 
           {activeTab === 'novel-editor' && (
             <NovelEditor

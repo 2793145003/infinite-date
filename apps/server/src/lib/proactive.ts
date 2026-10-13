@@ -322,16 +322,36 @@ async function generateProactiveSms(
     invite,
   };
 
+  let newMsgCount = 0;
   for (let i = 0; i < reply_data.messages.length; i++) {
     const msg = reply_data.messages[i]!;
     const msgId = genId();
     const msgTs = displayTs ?? now();
     const internal = i === 0 ? reply_data.internal : '';
     const internalNotable = i === 0 && reply_data.internal_notable ? 1 : 0;
+
+    // 幂等：同一线程 60s 内已经发过完全相同的主动短信（触发器重叠，如 scheduler tick 追尾）
+    // → 复用已有那条，不重复落库、不重复计入未读
+    const dup = db.prepare(`
+      SELECT id FROM text_messages
+      WHERE thread_id = ? AND sender = 'npc' AND body = ? AND created_at >= ?
+      ORDER BY created_at DESC LIMIT 1
+    `).get(threadId, msg, msgTs - 60_000) as { id: string } | undefined;
+    if (dup) {
+      result.messages.push({
+        id: dup.id,
+        text: msg,
+        internal: reply_data.internal,
+        internal_notable: reply_data.internal_notable,
+      });
+      continue;
+    }
+
     db.prepare(`
       INSERT INTO text_messages (id, thread_id, sender, body, status, internal, internal_notable, internal_viewed, created_at, delivered_at, metadata)
       VALUES (?, ?, 'npc', ?, 'delivered', ?, ?, 0, ?, ?, '{"proactive":true,"stage":${stage}}')
     `).run(msgId, threadId, msg, internal, internalNotable, msgTs, msgTs);
+    newMsgCount++;
     result.messages.push({
       id: msgId,
       text: msg,
@@ -341,7 +361,7 @@ async function generateProactiveSms(
   }
 
   const threadTs = displayTs ?? now();
-  db.prepare('UPDATE message_threads SET last_message_at = ?, unread_count = unread_count + ?, updated_at = ? WHERE id = ?').run(threadTs, result.messages.length, threadTs, threadId);
+  db.prepare('UPDATE message_threads SET last_message_at = ?, unread_count = unread_count + ?, updated_at = ? WHERE id = ?').run(threadTs, newMsgCount, threadTs, threadId);
 
   // 短信记忆折叠
   maybeFoldSmsIncremental(threadId, playerId, characterId).catch(err => console.error('[proactive] maybeFoldSmsIncremental failed:', err instanceof Error ? err.message : err));

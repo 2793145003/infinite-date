@@ -9,7 +9,7 @@ import { genId, now, jsonParse } from '../lib/util';
 import { buildSystemPrompt, buildMessages, generateReply, getHubLocationsText, getPlayerProfile, formatRelationshipDuration, smsMessageText, type PromptContext } from '../prompt/builder';
 import { retrieveRelevantMemories, maybeFoldSmsIncremental, getUnifiedTimeline } from '../lib/memory';
 import { resetSmsUrge, checkScheduleChange, insertProactiveImagePlaceholder, fillProactiveImage } from '../lib/proactive';
-import type { CharacterData } from '@idate/shared';
+import type { CharacterData, EmotionScores } from '@idate/shared';
 import { DEITY_ID } from '@idate/shared';
 import { isCreationKeyword } from './creation';
 import { spendPlayerPermission } from '../lib/permission';
@@ -17,6 +17,34 @@ import { getCosts } from '../lib/permission-config';
 import { loadCharacterData, getCharacterName, getCharacterAvatar } from '../lib/character';
 import { getCurrentSchedule, getNpcCurrentLocationName, getNpcInviteLocationId, getNpcOnlineState } from '../lib/schedule';
 import { undoLastPlayerMessage, findLastPlayerForRetry, saveNpcReply, updatePlayerDescription, maybeRetrieveSearchResults, resolveQuote, formatQuotePrefix } from '../lib/conversation-helpers';
+import { findRecentDuplicateMessage, loadRepliesAfter, type MsgRef } from '../lib/send-dedupe';
+import {
+  buildEmotionInjection,
+  attachEmotionToMessage,
+  readThreadEmotions,
+  topEmotion,
+  saveEmotionState,
+  readCurrentEmotion,
+} from '../lib/emotion';
+
+/** 本轮注入的角色心绪（角色级状态 + 时间衰减，跨短信/约会共用）；无状态或强度过低时返回 '' */
+function emotionInjection(playerId: string, characterId: string): string {
+  try {
+    return buildEmotionInjection(playerId, characterId);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 记下本轮心绪：① 挂到本轮第一条 NPC 气泡上（历史曲线用）；
+ * ② 写入角色级状态（跨渠道共享的「他此刻的心情」，弹窗和约会都读它）。
+ */
+function saveTurnEmotion(playerId: string, characterId: string, msgIds: string[], emotions?: EmotionScores): void {
+  if (!emotions) return;
+  if (msgIds.length) attachEmotionToMessage('text_messages', msgIds[0]!, emotions);
+  saveEmotionState(playerId, characterId, emotions, 'sms', msgIds[0] ?? null);
+}
 
 export async function smsRoutes(app: FastifyInstance): Promise<void> {
   // 获取短信联系人列表（线程）
@@ -147,6 +175,43 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ thread: threadInfo, messages });
   });
 
+  // 心绪：最近若干轮的八维心绪 + 当前最强那一维（供短信里点头像打开的弹窗用）
+  app.get('/sms/threads/:threadId/emotions', async (req, reply) => {
+    const playerId = requireAuth(req, reply);
+    if (!playerId) return;
+
+    const { threadId } = req.params as { threadId: string };
+    const thread = db
+      .prepare('SELECT character_id, player_id FROM message_threads WHERE id = ? AND player_id = ?')
+      .get(threadId, playerId) as { character_id: string; player_id: string } | undefined;
+    if (!thread) return reply.code(404).send({ error: '线程不存在' });
+
+    const rawLimit = Number((req.query as { limit?: string }).limit ?? 5);
+    const limit = Number.isFinite(rawLimit) ? Math.min(20, Math.max(1, Math.trunc(rawLimit))) : 5;
+    const turns = readThreadEmotions(threadId, limit);
+    const latest = turns[0];
+
+    // 「此刻心绪」读角色级状态（含时间衰减）——这才是他现在的心情，约会侧读的也是它。
+    // 状态缺失（老数据）时回退到最新一条消息上的心绪。
+    const cur = readCurrentEmotion(playerId, thread.character_id);
+    const curTop = cur ? topEmotion(cur.emotions) : null;
+    const current = cur && curTop
+      ? { key: curTop.key, cn: curTop.cn, value: curTop.value, emotions: cur.emotions, createdAt: cur.updatedAt }
+      : latest
+        ? { key: latest.top.key, cn: latest.top.cn, value: latest.top.value, emotions: latest.emotions, createdAt: latest.createdAt }
+        : null;
+
+    return reply.send({
+      characterId: thread.character_id,
+      // 旧→新，方便前端直接画折线
+      turns: turns
+        .slice()
+        .reverse()
+        .map((t) => ({ messageId: t.messageId, createdAt: t.createdAt, emotions: t.emotions, top: t.top })),
+      current,
+    });
+  });
+
   // 发送短信
   app.post('/sms/threads/:threadId/send', async (req, reply) => {
     const playerId = requireAuth(req, reply);
@@ -169,6 +234,25 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
 
     const ts = now();
     const textBody = text?.trim() || '';
+
+    // 幂等：响应丢失后用户手动重发同一句 → 返回第一次那条消息和已生成的 NPC 回复
+    const dedupeRef: MsgRef = {
+      table: 'text_messages', idColumn: 'thread_id', idValue: threadId,
+      authorColumn: 'sender', authorValue: 'player', textColumn: 'body',
+    };
+    if (textBody) {
+      const dup = findRecentDuplicateMessage(db, dedupeRef, textBody, ts);
+      if (dup) {
+        return reply.send({
+          ok: true,
+          duplicate: true,
+          playerMessage: { id: dup.id, text: textBody, imageAssetId: imagePath ?? null },
+          npcMessages: loadRepliesAfter(db, dedupeRef, dup).map((r) => ({ ...r, internal_viewed: false })),
+          invite: null,
+          imagePending: null,
+        });
+      }
+    }
 
     // 解析引用消息（前端直接传引用内容，不需要查数据库）
     let quoteMetadata = '{}';
@@ -249,6 +333,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       })),
       isTextMessage: true,
       isDeity,
+      emotionsEnabled: !isDeity,
       locationName: smsLocation || '（短信中无法确定位置）',
       hubLocations: getHubLocationsText(),
       retrievedMemories,
@@ -272,7 +357,14 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const systemPrompt = buildSystemPrompt(ctx);
-    const messages = buildMessages(systemPrompt, ctx.recentMessages, quotePrefix + textBody);
+    // 心绪注入：拼在当前这条 user 消息最前面。位置经离线实验验证——放 system prompt 末尾
+    // （situationalNote 位置）会被强人设完全盖过，只有拼进 user 消息才能真正改变语气。
+    const emotionPrefix = emotionInjection(playerId, thread.character_id);
+    const messages = buildMessages(
+      systemPrompt,
+      ctx.recentMessages,
+      emotionPrefix ? `${emotionPrefix}\n${quotePrefix}${textBody}` : quotePrefix + textBody,
+    );
 
     // 如果有图片，给最后一条user消息附加imagePath
     if (imagePath && messages.length > 0) {
@@ -284,6 +376,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
 
       // 存NPC回复
       const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
+      saveTurnEmotion(playerId, thread.character_id, npcSave.msgIds, reply_data.emotions);
       const npcMsgIds = npcSave.msgIds;
 
       // 玩家提问触发配图：LLM 输出 image_prompt → 先同步插占位气泡拿 id，再异步出图填图（文字消息已先入库，不阻塞）
@@ -456,6 +549,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       })),
       isTextMessage: true,
       isDeity,
+      emotionsEnabled: !isDeity,
       locationName: smsLocation || '（短信中无法确定位置）',
       hubLocations: getHubLocationsText(),
       retrievedMemories,
@@ -484,6 +578,7 @@ export async function smsRoutes(app: FastifyInstance): Promise<void> {
       const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
       const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
+      saveTurnEmotion(playerId, thread.character_id, npcSave.msgIds, reply_data.emotions);
       const npcMsgIds = npcSave.msgIds;
 
       // 玩家提问触发配图：LLM 输出 image_prompt → 先同步插占位气泡拿 id，再异步出图填图（文字消息已先入库，不阻塞）
@@ -702,6 +797,7 @@ export async function generateSmsGreeting(
     recentMessages: [],
     isTextMessage: true,
     isDeity: false,
+    emotionsEnabled: true,
     locationName: smsLocation || '（短信中无法确定位置）',
     hubLocations: getHubLocationsText(),
     retrievedMemories: null,
@@ -722,6 +818,7 @@ ${dateContext.lastExchange}
     const reply_data = await generateReply(messages, { temperature: 0.85, maxTokens: 1024, playerId });
 
     const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
+    saveTurnEmotion(playerId, characterId, npcSave.msgIds, reply_data.emotions);
 
     // 设为未读
     db.prepare('UPDATE message_threads SET unread_count = ?, last_message_at = ?, updated_at = ? WHERE id = ?').run(reply_data.messages.length, now(), now(), threadId);
@@ -730,6 +827,127 @@ ${dateContext.lastExchange}
 
     return { npcMessages: npcSave.formattedMessages };
   } catch {
+    return null;
+  }
+}
+
+/**
+ * 「他刚发过话还在等你回」的静默窗口：这段时间内不补接入消息，免得像连发催命。
+ * 超过这个窗口的悬空消息不算"正在等"——休眠线程反而最需要这条接入消息。
+ */
+const WELCOME_QUIET_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * 接入 QQ 之后的「他主动开口」第一条。
+ *
+ * 为什么需要：扫完码绑定成功，用户那边一片安静 —— 不知道通没通、不知道要不要说话。
+ * 让他自己发一条，既是连接确认，也是把这条通道真正用起来。
+ *
+ * 三条规矩：
+ *  ① **进库** —— 走 saveNpcReply 写 text_messages，和网页共用同一条 thread，
+ *     所以网页端也看得到、未读红点点得亮、心绪和记忆照常走（不会出现"QQ 里的对话网页没有"）
+ *  ② **不打破第四面墙** —— 提示词里明令不提"加好友""绑定""换个地方聊"
+ *  ③ **不堆消息** —— 线程里最后一条已经是他的话就不发（他正在等她回，再补一条就成了连发）
+ */
+export async function generateSmsWelcome(
+  playerId: string,
+  characterId: string,
+  threadId: string,
+  opts: { force?: boolean } = {},
+): Promise<{ npcMessages: { id: string; text: string; internal: string; internal_notable: boolean }[] } | null> {
+  const last = db.prepare('SELECT sender, created_at FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1').get(threadId) as
+    | { sender: string; created_at: number }
+    | undefined;
+  // 他刚发过话、还没被回（12 小时内）→ 不补，免得像连发催命。
+  // 但"两个月前那条没人回的消息"不算"正在等"——休眠线程恰恰最需要这条接入消息，
+  // 否则用户绑完看到的还是一片安静，等于没接。
+  if (!opts.force && last?.sender === 'npc' && now() - last.created_at < WELCOME_QUIET_MS) {
+    console.log('[sms-welcome] 跳过：他上一条还没被回，且在静默窗口内');
+    return null;
+  }
+
+  const characterData = loadCharacterData(playerId, characterId);
+  if (!characterData) {
+    console.error('[sms-welcome] 跳过：取不到角色数据', characterId);
+    return null;
+  }
+
+  const rel = db.prepare('SELECT player_description, created_at FROM relationships WHERE player_id = ? AND character_id = ?').get(playerId, characterId) as
+    | { player_description: string; created_at: number }
+    | undefined;
+
+  // 带上最近几条，让他接着眼下的话题说，而不是从头另起一段
+  const rows = db
+    .prepare('SELECT sender, body, image_asset_id FROM text_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 10')
+    .all(threadId) as Array<{ sender: string; body: string; image_asset_id: string | null }>;
+  const recentMessages = rows
+    .reverse()
+    .map(m => ({
+      role: (m.sender === 'player' ? 'player' : 'assistant') as 'player' | 'assistant',
+      text: m.image_asset_id ? '（发了张照片）' : m.body,
+    }))
+    .filter(m => m.text.trim().length > 0);
+
+  const smsLocation = getNpcCurrentLocationName(playerId, characterId, characterData, now());
+
+  const ctx: PromptContext = {
+    characterData,
+    playerDescription: rel?.player_description ?? '刚认识的陌生人',
+    playerProfile: getPlayerProfile(playerId),
+    chronicleSummary: getUnifiedTimeline(playerId, characterId),
+    // ⚠️ buildSystemPrompt 不读这个字段。历史必须作为**真实轮次**传给 buildMessages，
+    // 塞在这里会被静默忽略，模型就"不知道眼下是什么话题"，只能编一句像回复的话。
+    recentMessages: [],
+    isTextMessage: true,
+    isDeity: false,
+    emotionsEnabled: true,
+    locationName: smsLocation || '（短信中无法确定位置）',
+    hubLocations: getHubLocationsText(),
+    retrievedMemories: null,
+    relationshipDuration: rel?.created_at ? formatRelationshipDuration(rel.created_at) : undefined,
+  };
+
+  const systemPrompt = buildSystemPrompt(ctx);
+
+  // 按「最后一句是谁说的」分三种提示词。
+  // 关键在最后一种：他刚说完、她还没回，如果只说"接着说"，
+  // 他会去接自己上一句 —— 表现就是「把自己说的话当成对方的回复」。
+  //
+  // 提示词一律写成括号场景指令（和 proactive.ts 同一套惯例）：
+  // 历史是真实轮次，紧跟其后的这条如果写成普通口吻，模型会以为"这是对方说的话"。
+  const lastIsNpc = last?.sender === 'npc';
+  // 关于时间：这里**故意不加**「不要写月亮」这类约束。
+  // 系统提示词已经把「时间：星期二 下午（约14点）」传进去了，信息是够的；
+  // 而否定式约束（尤其一串"不要/不该"）会让小模型困惑，反而更容易写出那个词。
+  // 实测过一次下午写月亮，加约束后单样本未复现 —— 但按这个项目的既有判断，不引入否定词。
+  const hint = !recentMessages.length
+    ? `（你刚和她成为好友，这是你发给她的第一条消息。用你自己的方式开口：说说你此刻在做的事、或者你想问她的一句话。不要"你好""在吗"这种客套开场，不要自我介绍，一两句就够。）`
+    : lastIsNpc
+      ? `（你们有一阵子没说话了，她还没回你上面那句。现在你想主动跟她说句话：重新起个头，别去接你自己上一条。说说你此刻在做什么、看到什么东西突然想到她、或者想起你们之间的一件小事。一两句，不用解释为什么突然找她。）`
+      : `（她刚说了话，你想接一句。接着她的话头说，或者说说你现在正在做什么。像真人随手发条消息那样，一两句就够。）`;
+
+  // 历史作为真实轮次传进去（player→user / npc→assistant），他才能分清哪句是自己的、哪句是她的
+  const messages = buildMessages(systemPrompt, recentMessages, hint);
+
+  try {
+    const reply_data = await generateReply(messages, { temperature: 0.9, maxTokens: 700, playerId });
+
+    const npcSave = saveNpcReply('text_messages', 'thread_id', threadId, reply_data.messages, reply_data.internal, reply_data.internal_notable);
+    saveTurnEmotion(playerId, characterId, npcSave.msgIds, reply_data.emotions);
+
+    db.prepare('UPDATE message_threads SET unread_count = ?, last_message_at = ?, updated_at = ? WHERE id = ?').run(
+      reply_data.messages.length,
+      now(),
+      now(),
+      threadId,
+    );
+
+    updatePlayerDescription(playerId, characterId, reply_data.player_description, rel?.player_description, 'sms', '');
+
+    return { npcMessages: npcSave.formattedMessages };
+  } catch (err) {
+    // 别静默吞掉：不然接口只回 502，日志里什么都看不到（这个坑刚踩过）
+    console.error('[sms-welcome] 生成失败:', err instanceof Error ? (err.stack ?? err.message) : err);
     return null;
   }
 }

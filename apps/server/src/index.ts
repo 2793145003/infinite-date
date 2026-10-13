@@ -31,6 +31,7 @@ import { feedbackRoutes } from './routes/feedback';
 import { exploreRoutes } from './routes/explore';
 import { scenarioRoutes } from './routes/scenario';
 import { archiveRoutes } from './routes/archive';
+import { qqBridgeRoutes } from './routes/qq-bridge';
 import { sceneRoutes } from './routes/scene';
 import { sceneNamedRoutes } from './routes/scene-named';
 import { sceneExploreRoutes } from './routes/scene-explore';
@@ -38,6 +39,7 @@ import { sceneScenarioRoutes } from './routes/scene-scenario';
 import { novelRoutes } from './routes/novel';
 import { homePoemRoutes } from './routes/home-poem';
 import { planeRoutes } from './routes/plane';
+import { worldRoutes } from './routes/world';
 
 const app = Fastify({
   logger: {
@@ -82,6 +84,7 @@ async function start() {
       await exploreRoutes(api);
       await scenarioRoutes(api);
       await archiveRoutes(api);
+      await qqBridgeRoutes(api);
       await sceneRoutes(api);
       await sceneNamedRoutes(api);
       await sceneExploreRoutes(api);
@@ -89,6 +92,7 @@ async function start() {
       await novelRoutes(api);
       await homePoemRoutes(api);
       await planeRoutes(api);
+      await worldRoutes(api);
 
       // 健康检查（前端连接监测用，无认证）
       api.get('/health', async () => ({ status: 'ok', timestamp: Date.now(), imageGenEnabled: Boolean(config.ideogramUrl) }));

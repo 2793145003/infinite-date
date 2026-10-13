@@ -73,6 +73,22 @@ export type SourceType = 'public' | 'override' | 'private';
 
 // ─── LLM结构化输出 ───────────────────────────────────────
 
+/**
+ * 八维心绪（0-100）—— 角色的心理状态快照。
+ * 短信路径启用（见 server/src/lib/emotion.ts），约会聊天等共享 REPLY_SCHEMA 的路径不启用，
+ * 故在 LlmStructuredReply 里是可选字段。
+ */
+export interface EmotionScores {
+  joy: number; // 愉悦
+  desire: number; // 欲望
+  panic: number; // 慌乱
+  loss: number; // 失落
+  grievance: number; // 委屈
+  anger: number; // 愤怒
+  possessiveness: number; // 占有欲
+  tenderness: number; // 怜爱
+}
+
 export interface LlmStructuredReply {
   messages: string[];
   internal: string;
@@ -83,6 +99,7 @@ export interface LlmStructuredReply {
   need_search?: boolean; // NPC判断是否需要搜索记忆（短输入/nudge时）
   search_query?: string; // need_search=true时的检索query
   image_prompt?: string; // 可选：男主主动想配图的场景描述（中文，只描述景/物，绝不含人）。空/缺省=不配图
+  emotions?: EmotionScores; // 可选：本轮八维心绪快照（仅启用心绪的路径会给出）
 }
 
 // ─── 常量 ────────────────────────────────────────────────

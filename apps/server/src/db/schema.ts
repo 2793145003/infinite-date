@@ -645,4 +645,34 @@ CREATE TABLE IF NOT EXISTS home_poems (
   created_at    INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_home_poems_unique ON home_poems(player_id, character_id, date_key);
+
+-- ═══ 衍生世界（infinite-derivative-world：修仙程序化世界演化 + 女修手札式玩家养成）═══
+-- 每玩家一个世界存档；整个 WorldEngine 状态序列化进 save_data（JSON），恢复后继续演化
+CREATE TABLE IF NOT EXISTS derivative_worlds (
+  id         TEXT PRIMARY KEY,
+  player_id  TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL DEFAULT '',            -- 世界名（玩家命名 / 「第N世」）
+  seed       INTEGER NOT NULL,                    -- 世界种子（生成 NPC/地图的确定性来源）
+  save_data  TEXT NOT NULL,                       -- WorldSave JSON 快照（tick/npcs/events/map/player/rngState）
+  chat_history TEXT NOT NULL DEFAULT '{}',        -- 对话历史 JSON：{ [npcId]: [{speaker,text}...] }（多轮对话记忆）
+  tick       INTEGER NOT NULL DEFAULT 0,          -- 当前月（冗余，列表页展示）
+  status     TEXT NOT NULL DEFAULT 'active',      -- active 进行中
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_derivative_worlds_player ON derivative_worlds(player_id);
+
+-- ═══ 心绪（角色级状态：短信与约会共享的「他此刻的心情」）═══
+-- 为什么是角色级而不是挂在消息上：短信和约会是两套消息表，消息级状态跨不过去（会割裂）。
+-- 与 chronicles / memory_embeddings 同一个键（player_id + character_id），沿用项目既有的记忆维度。
+CREATE TABLE IF NOT EXISTS character_emotion_state (
+  player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL,
+  emotions      TEXT NOT NULL DEFAULT '{}',   -- 八维心绪 JSON
+  source        TEXT NOT NULL DEFAULT '',     -- 最后更新它的渠道：sms | scene
+  source_id     TEXT,                          -- 对应 thread_id / scene_session_id
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (player_id, character_id)
+);
+CREATE INDEX IF NOT EXISTS idx_emotion_state_updated ON character_emotion_state(updated_at);
 `;

@@ -14,9 +14,38 @@ import { db } from '../db';
 import { requireAuth } from '../lib/auth';
 import { genId, now, jsonParse } from '../lib/util';
 import { loadCharacterDataRaw, getCharacterAvatar, expandCapsules, getPlayerName } from '../lib/character';
+import { readCurrentEmotion, readCharacterEmotionHistory, topEmotion } from '../lib/emotion';
 import type { CharacterData } from '@idate/shared';
 
 export async function characterRoutes(app: FastifyInstance): Promise<void> {
+
+  // 角色此刻的心绪 + 跨渠道（短信/约会）的最近几轮情绪史 —— 点头像弹窗用
+  app.get('/characters/:characterId/emotions', async (req, reply) => {
+    const playerId = requireAuth(req, reply);
+    if (!playerId) return;
+
+    const { characterId } = req.params as { characterId: string };
+    const rawLimit = Number((req.query as { limit?: string }).limit ?? 5);
+    const limit = Number.isFinite(rawLimit) ? Math.min(20, Math.max(1, Math.trunc(rawLimit))) : 5;
+
+    const turns = readCharacterEmotionHistory(playerId, characterId, limit);
+    const cur = readCurrentEmotion(playerId, characterId); // 角色级状态（含时间衰减）
+    const curTop = cur ? topEmotion(cur.emotions) : null;
+    const latest = turns[turns.length - 1];
+
+    return reply.send({
+      characterId,
+      // 这份「此刻心绪」最后是哪个渠道更新的（sms / scene）
+      source: cur?.source ?? null,
+      // 旧→新，前端直接画折线
+      turns: turns.map((t) => ({ messageId: t.messageId, createdAt: t.createdAt, emotions: t.emotions, top: t.top })),
+      current: cur && curTop
+        ? { key: curTop.key, cn: curTop.cn, value: curTop.value, emotions: cur.emotions, createdAt: cur.updatedAt }
+        : latest
+          ? { key: latest.top.key, cn: latest.top.cn, value: latest.top.value, emotions: latest.emotions, createdAt: latest.createdAt }
+          : null,
+    });
+  });
 
   // 获取角色数据用于编辑
   app.get('/characters/:characterId/edit', async (req, reply) => {

@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { ArrowLeft, Send } from 'lucide-react';
+import { api, type EmotionPanelData } from '../lib/api';
+import { glowStyle } from '../lib/emotionVisual';
+import { EmotionModal } from './EmotionModal';
 
 /**
  * 场景对话页（v4 版）—— 从 v2 旧 UI SceneConversation 移植。
@@ -71,6 +74,8 @@ type SceneData = {
 type StreamDone = {
   locationName?: string;
   locationBackground?: string;
+  /** 服务端判定为重复发言（响应丢失后重发）：本轮没有新内容，前端应重载场景 */
+  duplicate?: boolean;
   [key: string]: unknown;
 };
 
@@ -230,6 +235,31 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
   const [avatarByName, setAvatarByName] = useState<Record<string, string>>({});
   // 主角（同行者）characterId 集合：仅主角显示加好友按钮；路过打酱油的路人不显示
   const [mainCharIds, setMainCharIds] = useState<Set<string>>(new Set());
+  // 在场角色的心绪（头像光环 + 弹窗）——心绪是角色级状态，和短信读的是同一份
+  const [emotionData, setEmotionData] = useState<Record<string, EmotionPanelData>>({});
+  const [emotionTarget, setEmotionTarget] = useState<{ characterId: string; name: string; avatar: string } | null>(null);
+
+  useEffect(() => {
+    const ids = [...new Set(Object.values<string>(idByName))].filter((s) => !!s);
+    if (!ids.length) return;
+    let alive = true;
+    void (async () => {
+      const out: Record<string, EmotionPanelData> = {};
+      await Promise.all(
+        ids.map(async (cid) => {
+          try {
+            out[cid] = await api.getCharacterEmotions(cid);
+          } catch {
+            /* 单个角色拉不到就跳过，不影响场景 */
+          }
+        }),
+      );
+      if (alive && Object.keys(out).length) setEmotionData((prev) => ({ ...prev, ...out }));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [idByName]);
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -423,7 +453,21 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
     setQuotingMsg(null);
     try {
       setSending(true);
-      await runStream(`/v4/api/scene-named/${sessionId}/advance`, JSON.stringify({ message: text, quote }));
+      const done = await runStream(`/v4/api/scene-named/${sessionId}/advance`, JSON.stringify({ message: text, quote }));
+      // 幂等命中：服务端判定为窗口内重复发言（通常是响应丢失后重发），本轮没有新内容。
+      // 按后端真值重载场景，避免把重复发言/重复回复上屏。
+      if (done?.duplicate) {
+        try {
+          const res = await fetch(`/v4/api/scene-named/${sessionId}`);
+          if (res.ok) {
+            const data = (await res.json()) as SceneData;
+            applyData(data);
+            try { sessionStorage.setItem(sceneCacheKey(sessionId), JSON.stringify(data)); } catch { /* quota */ }
+          }
+        } catch { /* ignore */ }
+        setSending(false);
+        return;
+      }
       setSending(false);
     } catch (e) {
       setSending(false);
@@ -678,7 +722,17 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
                     {l.kind !== 'player' && (
                       <div className="w-8 shrink-0 flex items-start">
                         {!isGroupContinuation(idx, l) && (
-                          <div className="w-8 h-8 rounded-full overflow-hidden border border-border-dark/5 flex items-center justify-center text-[13px] font-bold bg-bg-soft text-cyan shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cid = l.speaker ? idByName[l.speaker] : undefined;
+                              if (!cid) return;
+                              setEmotionTarget({ characterId: cid, name: l.speaker ?? '', avatar: resolveAvatar(l.speaker) ?? '' });
+                            }}
+                            className="w-8 h-8 rounded-full overflow-hidden border border-border-dark/5 flex items-center justify-center text-[13px] font-bold bg-bg-soft text-cyan shrink-0 cursor-pointer transition active:scale-95"
+                            style={glowStyle(emotionData[idByName[l.speaker ?? ''] ?? '']?.current?.emotions)}
+                            aria-label={`查看${l.speaker ?? ''}此刻的心绪`}
+                          >
                             {(() => {
                               const src = resolveAvatar(l.speaker);
                               return src ? (
@@ -687,7 +741,7 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
                                 l.speaker ? l.speaker.charAt(0) : '?'
                               );
                             })()}
-                          </div>
+                          </button>
                         )}
                       </div>
                     )}
@@ -871,7 +925,7 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
               setInput(v);
               try { localStorage.setItem(inputDraftKey(sessionId), v); } catch { /* ignore */ }
             }}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            onKeyDown={(e) => { /* 回车发送：挡住按键自动重复与输入法组词中的回车 */ if (e.key === 'Enter' && !e.repeat && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend(); } }}
             placeholder="你想做什么？"
             disabled={sending}
             className="h-10 flex-1 rounded-full bg-bg-muted backdrop-blur-xl border border-border-strong px-4 text-[13px] text-ink placeholder:text-ink-muted outline-none focus:bg-bg-soft transition"
@@ -890,6 +944,15 @@ export const SceneConversationScreen: React.FC<{ sessionId: string; onBack: () =
           </button>
         </div>
       </footer>
+
+      {emotionTarget && (
+        <EmotionModal
+          characterId={emotionTarget.characterId}
+          characterName={emotionTarget.name}
+          avatar={emotionTarget.avatar}
+          onClose={() => setEmotionTarget(null)}
+        />
+      )}
 
       {/* 结束约会确认弹窗 */}
       {showEndModal && (

@@ -18,6 +18,7 @@ import type { CharacterData } from '@idate/shared';
 import { DEITY_ID } from '@idate/shared';
 import type { ChatMessage } from '../llm/adapter';
 import { generateNpcMoment } from './moments';
+import { findRecentDuplicateMessage, loadRepliesAfter, type MsgRef } from '../lib/send-dedupe';
 import { getActiveLiveSlot } from '../lib/session-mutex';
 import { undoLastPlayerMessage, findLastPlayerForRetry, saveNpcReply, updatePlayerDescription, maybeRetrieveSearchResults, resolveQuote, formatQuotePrefix } from '../lib/conversation-helpers';
 import { generateSmsGreeting } from './sms';
@@ -259,6 +260,24 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
     const ts = now();
     const textBody = text?.trim() || '';
+
+    // 幂等：服务端已落库但响应没回到客户端时，用户会手动重发同一句。
+    // 命中窗口内重复 → 直接返回第一次那条消息和它已经生成的 NPC 回复，不重复落库、不重复调模型。
+    const dedupeRef: MsgRef = {
+      table: 'messages', idColumn: 'session_id', idValue: sessionId,
+      authorColumn: 'role', authorValue: 'player', textColumn: 'text',
+    };
+    if (textBody) {
+      const dup = findRecentDuplicateMessage(db, dedupeRef, textBody, ts);
+      if (dup) {
+        return reply.send({
+          ok: true,
+          duplicate: true,
+          playerMessage: { id: dup.id, text: textBody, imagePath: imagePath ?? null },
+          npcMessages: loadRepliesAfter(db, dedupeRef, dup).map((r) => ({ ...r, internal_viewed: false })),
+        });
+      }
+    }
 
     // 解析引用消息（前端直接传引用内容）
     let quoteMetadata = '{}';

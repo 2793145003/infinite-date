@@ -48,10 +48,12 @@ import { loadGreetingSection } from '../prompt/loader';
 import { buildAllActorMemories } from './memory-wiring';
 import { runTurnMemoryUpdate, TurnLine, TurnMemoryInput } from './turn-memory';
 import { buildCharacterCard } from './character-card';
+import { buildEmotionInjection, saveEmotionState } from './emotion';
 import { captureStartSnapshot, captureRoundSnapshot } from './scene-rollback';
 import { chat, tryParseJsonReply, ChatMessage } from '../llm/adapter';
 import { loadPrompt, renderPrompt } from '../prompt/loader';
 import { embed, storeEmbedding } from './embedding';
+import { findRecentDuplicateMessage } from './send-dedupe';
 
 const HUB_WORLD_ID = 'default-world';
 
@@ -85,6 +87,11 @@ export interface AdvanceSceneResult {
   locationName: string;
   /** 本轮结束后会话所在的地点背景图文件名（uploads/；空 = 无背景） */
   locationBackground: string;
+  /**
+   * 幂等命中：同一玩家在窗口内对同一场景发过完全相同的发言（响应丢失后手动重发），
+   * 本轮不再落库、不再跑引擎；前端收到后应重载场景而不是追加新内容。
+   */
+  duplicate?: boolean;
 }
 
 // ─── 任务 NPC 定位 ─────────────────────────────────────
@@ -499,11 +506,10 @@ function buildPlaneSceneContext(session: any): SceneContext {
   const companions = `${name}（角色）`;
 
   const playerName = (db.prepare('SELECT name FROM players WHERE id = ?').get(session.player_id) as any)?.name || '玩家';
-  const summary = expandPlaneText(planeChar?.summary || '', name, playerName);
   const goal = expandPlaneText(session.goal || planeChar?.goal || '', name, playerName);
 
-  // tone：对外简介当初见氛围；空则温馨放松
-  const tone = summary ? `你与对方的初见：${summary}` : '温馨放松的初遇';
+  // tone：位面任务无固定场景，留空（世界观/场景氛围由 persona 承载）
+  const tone = '';
 
   // rules：任务目标 + 动描规则
   const rulesParts: string[] = [];
@@ -511,10 +517,10 @@ function buildPlaneSceneContext(session: any): SceneContext {
   rulesParts.push('注意保持角色人设，每条回复都要有身体语言。');
   const rules = rulesParts.join('\n');
 
-  // 关系/玩家视角描述：summary 当第一印象 + 外貌（位面崽独立，不查 scene_relationships）
-  const sceneRelations = `${name} 是本次位面委托中遇到的人。`;
-  const appearance = expandPlaneText(planeChar?.appearance || '', name, playerName);
-  const playerDescriptions = `${name}：${[summary || '刚认识的人', appearance ? `外貌：${appearance}` : ''].filter(Boolean).join('；')}`;
+  // 关系/玩家视角描述：位面崽的实际注入点在 advanceScene 的 actors.player_description（读 scene_relationships，首次空）。
+  // 这里的 playerDescriptions → scene.player_descriptions 是死字段（无消费方），置空即可。
+  const sceneRelations = '';
+  const playerDescriptions = '';
 
   // 历史对话（同剧本逻辑，但 NPC 名一律用位面崽名，避免 getCharacterName 查不到主城卡）
   const convRowsRaw = db.prepare(
@@ -533,7 +539,7 @@ function buildPlaneSceneContext(session: any): SceneContext {
   return {
     location: '',
     locationName: '',
-    locationDesc: summary,
+    locationDesc: '',
     tone,
     rules,
     companions,
@@ -622,6 +628,31 @@ export async function advanceScene(
   ).get(sessionId, playerId) as any;
   if (!session) throw new Error('场景会话不存在');
   if (session.ended) throw new Error('场景已结束');
+
+  // 1.5) 幂等：服务端已落库但响应没回到客户端时，用户会手动重发同一句。
+  //      命中窗口内重复 → 不落库、不跑引擎（也就不会重复生成 NPC 回复），
+  //      只回一个 duplicate 标记，前端据此重载场景。
+  if (playerMessage && playerMessage.trim()) {
+    const dupPlayerLine = findRecentDuplicateMessage(db, {
+      table: 'scene_messages', idColumn: 'scene_session_id', idValue: sessionId,
+      authorColumn: 'role', authorValue: 'player', textColumn: 'text',
+    }, playerMessage.trim(), Date.now());
+    if (dupPlayerLine) {
+      return {
+        duplicate: true,
+        sessionId,
+        roundNo: session.round_no,
+        output: [],
+        statsState: {},
+        statsChangesOverall: [],
+        playerDescription: null,
+        currentActivity: null,
+        locationId: session.current_location_id ?? session.location_id ?? null,
+        locationName: '',
+        locationBackground: '',
+      };
+    }
+  }
 
   // 2) 玩家画像 + 场景上下文
   const { playerName, profile } = buildPlayerProfile(playerId);
@@ -750,19 +781,20 @@ export async function advanceScene(
       player_profile: profile,
       player_description: npc
         ? '常驻在此的熟面孔'
-        : isPlane
-          ? (() => { const pc = getPlaneCharacter(a.characterId); return pc?.summary ? expandPlaneText(pc.summary, pc.name, playerName) : '刚认识的人'; })()
-          : (() => {
-              const rel = db.prepare(
-                'SELECT player_description, current_activity FROM scene_relationships WHERE player_id = ? AND character_id = ? ORDER BY updated_at DESC LIMIT 1'
-              ).get(playerId, a.characterId) as any;
-              actorCurrentActivity = rel?.current_activity ?? '';
-              return rel?.player_description ?? '刚认识的陌生人';
-            })(),
+        : (() => {
+            const rel = db.prepare(
+              'SELECT player_description, current_activity FROM scene_relationships WHERE player_id = ? AND character_id = ? ORDER BY updated_at DESC LIMIT 1'
+            ).get(playerId, a.characterId) as any;
+            actorCurrentActivity = rel?.current_activity ?? '';
+            // 位面崽首次无记录→空（等第一轮模型输出后回写延续）；约会/任务用「刚认识的陌生人」兜底
+            return rel?.player_description ?? (isPlane ? '' : '刚认识的陌生人');
+          })(),
       current_activity: npc ? '' : actorCurrentActivity,
       chronicle_summary: mems[a.key]?.chronicle_summary ?? '',
       retrieved_memories: mems[a.key]?.retrieved_memories ?? '',
       stance,
+      // 他此刻的心绪（角色级状态 + 时间衰减）——短信里刚发生的心情，约会开场就带着
+      emotion_state: safeEmotionInjection(playerId, a.characterId),
     };
   }
 
@@ -874,7 +906,7 @@ export async function advanceScene(
     }
 
     const insertMsg = db.prepare(
-      'INSERT INTO scene_messages (id, scene_session_id, round_no, role, character_id, character_name, text, stats_delta, quote, internal, internal_notable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO scene_messages (id, scene_session_id, round_no, role, character_id, character_name, text, stats_delta, quote, internal, internal_notable, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
 
   /** fire-and-forget: 存对话原文 embedding 供三路搜索的【对话原文】通道检索 */
@@ -911,6 +943,8 @@ export async function advanceScene(
         null,
         item.internal ?? '',
         item.internalNotable ? 1 : 0,
+        // 心绪挂在该拍第一条气泡上（与短信侧一致）
+        JSON.stringify(item.emotions ? { emotions: item.emotions } : {}),
         now,
       );
       indexSceneMessage(npcMsgId, actor?.characterId ?? null, item.speaker ?? actor?.characterName ?? '角色', cleanStraySymbols(item.content));
@@ -928,6 +962,7 @@ export async function advanceScene(
         null,
         '',
         0,
+        '{}',
         now,
       );
       if (item.statsChanges) statsChangesOverall.push(...item.statsChanges);
@@ -1058,8 +1093,8 @@ export async function advanceScene(
   for (const item of result.output) {
     if (item.kind === 'character' && item.playerDescription) {
       const actor = actorOrder.find((a) => a.key === item.speaker);
-      // 位面崽不写 scene_relationships（不占 characters 表，跨场不延续）
-      if (actor && !npcById.has(actor.characterId) && !isPlane) {
+      // 主角（含位面崽）写 scene_relationships；路人跳过（不占 characters 表，跨场不延续）
+      if (actor && !npcById.has(actor.characterId)) {
         db.prepare(
           `INSERT INTO scene_relationships (id, player_id, character_id, scene_session_id, player_description, current_activity, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1072,6 +1107,14 @@ export async function advanceScene(
   }
 
   db.exec('COMMIT');
+
+  // 落库后：把本轮各角色的心绪写回角色级状态（跨短信/约会共享的那一份）。
+  // 放在事务外——状态只是展示/注入层，写失败不该回滚整轮已落库的对话。
+  // 同一角色本轮多拍时以最后一拍为准（那是他这一轮结束时的状态）。
+  for (const item of result.output) {
+    if (item.kind !== 'character' || !item.emotions || !item.characterId) continue;
+    saveEmotionState(playerId, item.characterId, item.emotions, 'scene', sessionId);
+  }
 
   // move 后转场旁白：地点切换了，在新环境里插一段正常的环境旁白。
   // 放在 COMMIT 之后——不阻塞事务，也不影响落库。
@@ -1363,6 +1406,15 @@ export async function judgeMissionGoal(
     db.prepare('UPDATE scene_sessions SET goal_achieved = 1, updated_at = ? WHERE id = ?').run(Date.now(), sessionId);
   }
   return { goalAchieved: result.goalAchieved, goalReason: result.goalReason };
+}
+
+/** 心绪注入文本（读角色级状态 + 时间衰减）；读不到或出错一律返回空串，不注入 */
+function safeEmotionInjection(playerId: string, characterId: string): string {
+  try {
+    return buildEmotionInjection(playerId, characterId);
+  } catch {
+    return '';
+  }
 }
 
 /**
